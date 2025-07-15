@@ -22,7 +22,7 @@ export class ParticleSystem implements IGameSystem {
   }
 
   initialize(): void {
-    console.log('ParticleSystem initialized');
+
   }
 
   update(deltaTime: number): void {

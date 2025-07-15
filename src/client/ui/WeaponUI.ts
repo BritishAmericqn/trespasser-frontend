@@ -36,7 +36,7 @@ export class WeaponUI implements IGameSystem {
 
   initialize(): void {
     this.setupEventListeners();
-    console.log('WeaponUI initialized');
+
   }
 
   update(deltaTime: number): void {

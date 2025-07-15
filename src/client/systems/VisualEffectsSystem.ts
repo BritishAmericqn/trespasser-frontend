@@ -22,7 +22,7 @@ export class VisualEffectsSystem implements IGameSystem {
   initialize(): void {
     this.setupBackendEventListeners();
     this.setupLocalEventListeners();
-    console.log('VisualEffectsSystem initialized with Phaser rendering');
+
   }
 
   update(deltaTime: number): void {
@@ -65,13 +65,10 @@ export class VisualEffectsSystem implements IGameSystem {
   private setupBackendEventListeners(): void {
     // Listen for weapon events from backend
     this.scene.events.on('backend:weapon:fired', (data: any) => {
-      console.log('🔥 FRONTEND: Processing weapon:fired event', data);
-      console.log('📍 BACKEND POSITION DATA:', {
-        backendPlayerPos: data.position,
-        backendStartPos: data.startPosition,
-        backendHitPos: data.hitPosition,
-        weaponType: data.weaponType
-      });
+      // Log only essential hit detection info
+      if (data.hitPosition) {
+        console.log(`🔫 SHOT: ${data.weaponType} from (${data.position?.x},${data.position?.y}) → hit at (${data.hitPosition.x},${data.hitPosition.y})`);
+      }
       this.showMuzzleFlash(data.position, data.direction);
       
       // Show bullet trail to where it actually hit (from backend)
@@ -81,7 +78,7 @@ export class VisualEffectsSystem implements IGameSystem {
     });
 
     this.scene.events.on('backend:weapon:hit', (data: any) => {
-      console.log('🎯 FRONTEND: Processing weapon:hit event', data);
+      console.log(`🎯 HIT: Player at (${data.position?.x},${data.position?.y})`);
       this.showHitMarker(data.position);
       
       // Show bullet trail to hit point
@@ -91,7 +88,9 @@ export class VisualEffectsSystem implements IGameSystem {
     });
 
     this.scene.events.on('backend:weapon:miss', (data: any) => {
-      console.log('💥 FRONTEND: Processing weapon:miss event', data);
+      if (data.position) {
+        console.log(`❌ MISS: Wall hit at (${data.position.x},${data.position.y})`);
+      }
       this.showImpactEffect(data.position, data.direction);
       
       // Show bullet trail to miss point
@@ -101,7 +100,9 @@ export class VisualEffectsSystem implements IGameSystem {
     });
 
     this.scene.events.on('backend:wall:damaged', (data: any) => {
-      console.log('🧱 FRONTEND: Processing wall:damaged event', data);
+      if (data.wallId && data.position) {
+        console.log(`🧱 WALL DAMAGED: ${data.wallId} at (${data.position.x},${data.position.y})`);
+      }
       this.showWallDamageEffect(data.position, data.material || 'concrete');
       // Also show hit marker for wall hits
       this.showHitMarker(data.position);
@@ -113,7 +114,6 @@ export class VisualEffectsSystem implements IGameSystem {
     });
 
     this.scene.events.on('backend:explosion:created', (data: any) => {
-      console.log('💥 FRONTEND: Processing explosion:created event', data);
       
       // Show authoritative explosion (overrides client prediction)
       this.showExplosionEffect(data.position, data.radius);
@@ -146,9 +146,7 @@ export class VisualEffectsSystem implements IGameSystem {
         const hitWall = this.isTargetDifferentFromMouse(hitPoint, data.targetPosition);
         if (hitWall) {
           this.showWallDamageEffect(hitPoint, 'concrete');
-          console.log(`💥 ${data.weaponType} hit wall and exploded at client-side collision detection`);
-        } else {
-          console.log(`💥 ${data.weaponType} exploded at target position`);
+          console.log(`💥 ${data.weaponType} HIT WALL (explosion) at (${hitPoint.x},${hitPoint.y})`);
         }
         
       } else {
@@ -160,17 +158,10 @@ export class VisualEffectsSystem implements IGameSystem {
         const hitWall = this.isTargetDifferentFromMouse(hitPoint, data.targetPosition);
         if (hitWall) {
           this.showWallDamageEffect(hitPoint, 'concrete');
-          console.log('🧱 Bullet hit wall at client-side collision detection');
-          console.log('🧱 Hit details:', {
-            firePosition: data.position,
-            targetPosition: data.targetPosition,
-            actualHitPoint: hitPoint,
-            distance: Math.hypot(hitPoint.x - data.position.x, hitPoint.y - data.position.y)
-          });
+          const distance = Math.hypot(hitPoint.x - data.position.x, hitPoint.y - data.position.y);
+          console.log(`🔫 ${data.weaponType} HIT WALL at (${hitPoint.x},${hitPoint.y}) - distance: ${distance.toFixed(0)}px`);
         }
       }
-      
-      console.log('🔥 Local weapon effects triggered');
     });
   }
 
@@ -389,7 +380,9 @@ export class VisualEffectsSystem implements IGameSystem {
       // Check collision with walls
       for (const wall of wallsData) {
         if (this.isPointInWall(currentX, currentY, wall)) {
-          // Hit a wall, return the hit point
+          // Hit a wall, log debug info
+          console.log(`🎯 CLIENT HIT DETECTION: Wall ${wall.id} hit at (${currentX.toFixed(1)}, ${currentY.toFixed(1)})`);
+          console.log(`   Wall bounds: x:${wall.position.x}-${wall.position.x + wall.width}, y:${wall.position.y}-${wall.position.y + wall.height}`);
           return { x: currentX, y: currentY };
         }
       }

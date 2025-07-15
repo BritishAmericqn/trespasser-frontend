@@ -33,7 +33,7 @@ export class DestructionRenderer implements IGameSystem {
     this.setupRenderCanvas();
     this.generateWallSprites();
     this.setupEventListeners();
-    console.log('DestructionRenderer initialized');
+
   }
 
   update(deltaTime: number): void {
@@ -198,14 +198,9 @@ export class DestructionRenderer implements IGameSystem {
   private setupEventListeners(): void {
     // Listen for wall damage events from backend
     this.scene.events.on('backend:wall:damaged', (data: any) => {
-      console.log('🧱 DESTRUCTION: Processing wall:damaged event', data);
-      console.log('🧱 DESTRUCTION: Wall data details:', {
-        wallId: data.wallId,
-        sliceIndex: data.sliceIndex,
-        newHealth: data.newHealth,
-        isDestroyed: data.isDestroyed,
-        wallExists: this.walls.has(data.wallId)
-      });
+      if (data.wallId && data.sliceIndex !== undefined) {
+        console.log(`🧱 WALL DAMAGE: ${data.wallId} slice ${data.sliceIndex} - health: ${data.newHealth}${data.isDestroyed ? ' (DESTROYED)' : ''}`);
+      }
       
       if (this.walls.has(data.wallId)) {
         this.updateWallDamage(data.wallId, data.sliceIndex, data.newHealth);
@@ -215,7 +210,7 @@ export class DestructionRenderer implements IGameSystem {
           const wall = this.walls.get(data.wallId);
           if (wall) {
             wall.destructionMask[data.sliceIndex] = 1;
-            console.log('💥 DESTRUCTION: Backend marked slice as destroyed');
+  
           }
         }
       } else {
@@ -231,7 +226,7 @@ export class DestructionRenderer implements IGameSystem {
     // Listen for game state updates to add new walls
     this.scene.events.on('network:gameState', (gameState: any) => {
       if (gameState.walls) {
-        console.log('🧱 DESTRUCTION: Updating walls from game state', gameState.walls);
+  
         this.updateWallsFromGameState(gameState.walls);
       }
     });
@@ -376,7 +371,7 @@ export class DestructionRenderer implements IGameSystem {
         };
         
         this.walls.set(wallId, wall);
-        console.log(`🧱 New wall created: ${wallId}`);
+  
       } else {
         // Update existing wall
         const wall = this.walls.get(wallId)!;
@@ -465,12 +460,7 @@ export class DestructionRenderer implements IGameSystem {
         needsUpdate: true
       };
       this.walls.set(wall.id, wall);
-      console.log(`🧱 Wall ${wall.id} created: ${wall.material} (${wall.maxHealth} health) at (${wall.position.x}, ${wall.position.y})`);
     });
-
-    console.log(`🧱 Added ${testWalls.length} test walls to DestructionRenderer`);
-    console.log(`🧱 Wall IDs: ${Array.from(this.walls.keys()).join(', ')}`);
-    console.log(`🧱 Ready to receive backend wall damage events!`);
   }
 
   simulateWallDamage(wallId: string, damage: number = 20): void {
@@ -483,6 +473,34 @@ export class DestructionRenderer implements IGameSystem {
     
     this.updateWallDamage(wallId, sliceIndex, newHealth);
     
-    console.log(`🧱 Simulated damage to wall ${wallId}, slice ${sliceIndex}: ${newHealth}/${wall.maxHealth}`);
+
+  }
+  
+  getWallsDebugInfo(): any[] {
+    const wallsInfo: any[] = [];
+    
+    this.walls.forEach((wall, wallId) => {
+      const currentHealth = wall.sliceHealth.reduce((sum, health) => sum + health, 0);
+      const sliceMaxHealth = wall.maxHealth / 5;
+      
+      const slices = wall.sliceHealth.map((health, index) => ({
+        index,
+        health,
+        destroyed: wall.destructionMask[index] === 1
+      }));
+      
+      wallsInfo.push({
+        id: wallId,
+        position: wall.position,
+        material: wall.material,
+        maxHealth: wall.maxHealth,
+        currentHealth,
+        sliceMaxHealth,
+        slices,
+        isDestroyed: currentHealth <= 0
+      });
+    });
+    
+    return wallsInfo;
   }
 } 

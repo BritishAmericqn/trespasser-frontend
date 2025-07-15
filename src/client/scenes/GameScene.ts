@@ -25,6 +25,7 @@ export class GameScene extends Phaser.Scene {
   private grenadeChargeBar!: Phaser.GameObjects.Graphics;
   private wallGraphics!: Phaser.GameObjects.Graphics;
   private debugOverlay!: Phaser.GameObjects.Text;
+  private wallDebugText!: Phaser.GameObjects.Text;
   private lastGameStateTime: number = 0;
 
   constructor() {
@@ -36,7 +37,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   create(): void {
-    console.log('GameScene created');
+
     
     // Create background
     this.add.rectangle(0, 0, GAME_CONFIG.GAME_WIDTH, GAME_CONFIG.GAME_HEIGHT, 0x2d2d2d)
@@ -76,10 +77,10 @@ export class GameScene extends Phaser.Scene {
     (this as any).backendIndicator = backendIndicator;
 
     // Create connection status text
-    this.connectionStatus = this.add.text(10, 10, 'Connecting...', {
-      fontSize: '12px',
+    this.connectionStatus = this.add.text(GAME_CONFIG.GAME_WIDTH - 5, 5, 'Connecting...', {
+      fontSize: '8px',
       color: '#ffffff'
-    });
+    }).setOrigin(1, 0);
 
     this.inputSystem.initialize();
     this.networkSystem.initialize();
@@ -409,7 +410,6 @@ export class GameScene extends Phaser.Scene {
         const backendIndicator = (this as any).backendIndicator;
         if (backendIndicator) {
           backendIndicator.setPosition(data.position.x, data.position.y);
-          console.log('📍 Backend position indicator updated:', data.position);
         }
         
         // Also sync our player position when backend sends position data
@@ -435,11 +435,7 @@ export class GameScene extends Phaser.Scene {
     const localPos = this.playerPosition;
     const drift = Math.hypot(serverPos.x - localPos.x, serverPos.y - localPos.y);
     
-    console.log('📍 Applying backend position:', {
-      server: serverPos,
-      local: localPos,
-      drift: drift.toFixed(2)
-    });
+
     
     // Update backend indicator
     const backendIndicator = (this as any).backendIndicator;
@@ -489,21 +485,23 @@ export class GameScene extends Phaser.Scene {
   private createTestWalls(): void {
     // Add test walls to the DestructionRenderer
     this.destructionRenderer.addTestWalls();
-    console.log('Test walls added to DestructionRenderer');
+
   }
 
   private createUI(): void {
-    // Create input state display for debugging
-    const inputText = this.add.text(10, 30, '', {
-      fontSize: '10px',
-      color: '#ffffff'
+    // Create input state display for debugging - moved to bottom left
+    const inputText = this.add.text(5, GAME_CONFIG.GAME_HEIGHT - 5, '', {
+      fontSize: '8px',
+      color: '#ffffff',
+      lineSpacing: -1  // Slightly tighter line spacing
     });
+    inputText.setOrigin(0, 1);
     inputText.setDepth(100);
     
     // Debug overlay for game state tracking
-    this.debugOverlay = this.add.text(GAME_CONFIG.GAME_WIDTH - 10, GAME_CONFIG.GAME_HEIGHT - 10, 
+    this.debugOverlay = this.add.text(GAME_CONFIG.GAME_WIDTH - 5, GAME_CONFIG.GAME_HEIGHT - 5, 
       'Last Game State: Never', {
-      fontSize: '10px',
+      fontSize: '8px',
       color: '#ffff00'
     }).setOrigin(1, 1).setDepth(1000);
 
@@ -519,14 +517,9 @@ export class GameScene extends Phaser.Scene {
         const effectCounts = this.visualEffectsSystem.getEffectCounts();
         
         inputText.setText([
-          `Position: ${this.playerPosition.x.toFixed(0)}, ${this.playerPosition.y.toFixed(0)}`,
-          `Movement: ${direction.x.toFixed(2)}, ${direction.y.toFixed(2)} (${(speed * 100).toFixed(0)}%)`,
-          `Mouse: ${inputState.mouse.x.toFixed(0)}, ${inputState.mouse.y.toFixed(0)}`,
-          `Weapon: ${currentWeapon || 'None'} ${isADS ? '[ADS]' : ''}`,
-          `Keys: R:${inputState.keys.r} G:${inputState.keys.g} 1:${inputState.keys['1']} 2:${inputState.keys['2']}`,
-          `Grenade Charge: ${grenadeCharge}/5`,
-          `Effects: Flash:${effectCounts.muzzleFlashes} Hit:${effectCounts.hitMarkers} Particles:${effectCounts.particles} Trails:${effectCounts.bulletTrails}`,
-          `Walls: ${this.destructionRenderer.getWallCount()}`
+          `Pos: ${this.playerPosition.x.toFixed(0)},${this.playerPosition.y.toFixed(0)} | Move: ${(speed * 100).toFixed(0)}%`,
+          `Wpn: ${currentWeapon || 'None'} ${isADS ? 'ADS' : ''} | Gren: ${grenadeCharge}/5`,
+          `FX: F${effectCounts.muzzleFlashes} H${effectCounts.hitMarkers} P${effectCounts.particles}`
         ].join('\n'));
       }
     });
@@ -539,7 +532,7 @@ export class GameScene extends Phaser.Scene {
         y: 50 + Math.random() * 170 
       };
       this.visualEffectsSystem.showHitMarker(testPos);
-      console.log('🎯 TEST: Hit marker triggered');
+
     });
 
     // Debug: Show connection status
@@ -564,7 +557,7 @@ export class GameScene extends Phaser.Scene {
         y: 50 + Math.random() * 170 
       };
       this.visualEffectsSystem.showImpactEffect(testPos, Math.random() * Math.PI * 2);
-      console.log('💥 TEST: Miss effect triggered');
+
     });
 
     this.input.keyboard!.on('keydown-B', () => {
@@ -593,27 +586,6 @@ export class GameScene extends Phaser.Scene {
       console.log('💥 TEST: Explosion effect triggered');
     });
 
-    // S - Request sync from backend
-    this.input.keyboard!.on('keydown-S', () => {
-      console.log('🔄 Requesting position sync from backend...');
-      this.networkSystem.emit('player:requestSync', {
-        currentPosition: this.playerPosition,
-        timestamp: Date.now()
-      });
-    });
-    
-    // D - Debug client prediction
-    this.input.keyboard!.on('keydown-D', () => {
-      const debugInfo = this.clientPrediction.getDebugInfo();
-      console.log('🎯 CLIENT PREDICTION DEBUG:', {
-        ...debugInfo,
-        drift: Math.hypot(
-          debugInfo.renderPosition.x - debugInfo.serverPosition.x,
-          debugInfo.renderPosition.y - debugInfo.serverPosition.y
-        ).toFixed(2) + 'px'
-      });
-    });
-    
     this.input.keyboard!.on('keydown-P', () => {
       // Debug position information
       console.log('🎯 POSITION DEBUG SNAPSHOT:', {
@@ -650,36 +622,79 @@ export class GameScene extends Phaser.Scene {
       this.events.emit('weapon:fire', testFire);
     });
 
-    // Create controls legend
-    this.add.text(10, GAME_CONFIG.GAME_HEIGHT - 200, [
-      'Controls:',
-      '🔵 Ctrl = Sneak (50%)',
-      '🟢 WASD = Walk (100%)',
-      '🔴 Shift+Forward = Run (150%)',
-      '🔫 Left Click = Fire (trails stop at walls, explosives explode)',
-      '🎯 Right Click = ADS',
-      '🔄 R = Reload',
-      '💣 G = Grenade (Hold)',
-      '🔀 1-4 = Weapon Switch',
-      '',
-      'Debug:',
-      '📊 D = Client Prediction Debug',
-      '📍 S = Request Position Sync',
-      '',
-      'Position Indicators:',
-      '🟩 Green Square = Your Position',
-      '🟥 Red Outline = Backend Position',
-      '',
-      'Test Effects:',
-      '🎯 H = Hit Marker',
-      '💥 M = Miss Sparks',
-      '🧱 B = Wall Damage',
-      '💥 E = Explosion',
-      '🔌 C = Connection Status'
-    ].join('\n'), {
-      fontSize: '10px',
-      color: '#cccccc'
+    this.input.keyboard!.on('keydown-D', () => {
+      // Debug: Show wall boundaries
+      console.log('🧱 WALL DEBUG - Client-side wall positions:');
+      const wallsData = this.destructionRenderer.getWallsData();
+      wallsData.forEach(wall => {
+        console.log(`Wall ${wall.id}:`, {
+          position: wall.position,
+          size: { width: wall.width, height: wall.height },
+          bounds: {
+            left: wall.position.x,
+            right: wall.position.x + wall.width,
+            top: wall.position.y,
+            bottom: wall.position.y + wall.height
+          },
+          destroyed: wall.destructionMask
+        });
+      });
+    });
+
+    // Create wall debug display - smaller and repositioned
+    this.wallDebugText = this.add.text(5, 20, '', {
+      fontSize: '8px',
+      color: '#00ff00',
+      lineSpacing: -1  // Slightly tighter line spacing
     }).setDepth(100);
+    
+    // Update wall debug info every frame
+    this.events.on('update', () => {
+      this.updateWallDebugDisplay();
+    });
+  }
+
+  private updateWallDebugDisplay(): void {
+    if (!this.wallDebugText || !this.destructionRenderer) return;
+    
+    const wallsData = this.destructionRenderer.getWallsDebugInfo();
+    const lines: string[] = ['WALLS:'];
+    
+    wallsData.forEach((wall: any) => {
+      const hp = ((wall.currentHealth / wall.maxHealth) * 100).toFixed(0);
+      const status = wall.currentHealth <= 0 ? 'X' : 'OK';
+      
+      lines.push(`${wall.id}: ${hp}% ${status}`);
+      
+      // Show damaged slices only
+      const damagedSlices = wall.slices.filter((s: any) => s.health < wall.sliceMaxHealth);
+      if (damagedSlices.length > 0) {
+        const sliceInfo = damagedSlices.map((s: any) => `S${s.index}:${s.health}`).join(' ');
+        lines.push(` ${sliceInfo}`);
+      }
+    });
+    
+    // Compact weapon damage info
+    lines.push('DMG: R25 P35 G100 X150');
+    
+    this.wallDebugText.setText(lines.join('\n'));
+  }
+  
+  private createHealthBar(current: number, max: number): string {
+    const percent = Math.max(0, Math.min(1, current / max)); // Clamp between 0 and 1
+    const barLength = 10;
+    const filled = Math.max(0, Math.floor(percent * barLength));
+    const empty = Math.max(0, barLength - filled);
+    
+    if (percent > 0.7) {
+      return '🟩'.repeat(filled) + '⬜'.repeat(empty);
+    } else if (percent > 0.3) {
+      return '🟨'.repeat(filled) + '⬜'.repeat(empty);
+    } else if (percent > 0) {
+      return '🟥'.repeat(filled) + '⬜'.repeat(empty);
+    } else {
+      return '⬛'.repeat(barLength);
+    }
   }
 
   shutdown(): void {
@@ -703,15 +718,15 @@ export class GameScene extends Phaser.Scene {
 
   private addCoordinateDebug(): void {
     // Draw origin point
-    this.add.circle(0, 0, 5, 0xff0000);
-    this.add.text(0, 0, '(0,0)', { fontSize: '10px', color: '#ff0000' }).setOrigin(0.5);
+    this.add.circle(0, 0, 3, 0xff0000);
+    this.add.text(0, 0, '(0,0)', { fontSize: '5px', color: '#ff0000' }).setOrigin(0.5);
     
     // Draw game bounds (480x270)
     const bounds = this.add.rectangle(240, 135, 480, 270);
-    bounds.setStrokeStyle(2, 0xffffff, 0.3);
+    bounds.setStrokeStyle(1, 0xffffff, 0.2);
     
     // Draw grid lines every 50 pixels
-    const gridAlpha = 0.2;
+    const gridAlpha = 0.1;
     const gridColor = 0x00ff00;
     
     // Vertical lines
@@ -724,27 +739,16 @@ export class GameScene extends Phaser.Scene {
       this.add.line(0, 0, 0, y, 480, y, gridColor, gridAlpha).setOrigin(0);
     }
     
-    // Add coordinate labels at key points
-    this.add.text(240, 10, '(240, 0)', { fontSize: '8px', color: '#00ff00' }).setOrigin(0.5);
-    this.add.text(240, 260, '(240, 270)', { fontSize: '8px', color: '#00ff00' }).setOrigin(0.5);
-    this.add.text(10, 135, '(0, 135)', { fontSize: '8px', color: '#00ff00' }).setOrigin(0, 0.5);
-    this.add.text(470, 135, '(480, 135)', { fontSize: '8px', color: '#00ff00' }).setOrigin(1, 0.5);
+    // Remove coordinate labels - too cluttered at this resolution
     
-    // Show mouse world position on move
-    const mouseText = this.add.text(10, 10, '', { fontSize: '10px', color: '#ffff00' });
+    // Show mouse world position on move - top right corner
+    const mouseText = this.add.text(GAME_CONFIG.GAME_WIDTH - 5, 15, '', { fontSize: '8px', color: '#ffff00' });
+    mouseText.setOrigin(1, 0);
     this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
       const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
       mouseText.setText(`Mouse: (${worldPoint.x.toFixed(0)}, ${worldPoint.y.toFixed(0)})`);
     });
     
-    // Debug: Show player rotation
-    const rotationText = this.add.text(10, 20, '', { fontSize: '10px', color: '#ffff00' });
-    this.events.on('update', () => {
-      if (this.inputSystem) {
-        const rotation = (this.inputSystem as any).playerRotation; // Access private property for debug
-        const degrees = (rotation * 180 / Math.PI).toFixed(1);
-        rotationText.setText(`Rotation: ${degrees}°`);
-      }
-    });
+    // Debug: Show player rotation - removed to reduce clutter
   }
 } 

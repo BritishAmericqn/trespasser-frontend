@@ -21,7 +21,7 @@ export class ClientPrediction {
   private onPositionUpdate: ((pos: Vector2) => void) | null = null;
   
   constructor() {
-    console.log('🎯 Client Prediction System initialized');
+
   }
   
   setPositionCallback(callback: (pos: Vector2) => void): void {
@@ -88,7 +88,7 @@ export class ClientPrediction {
     // Log reconciliation info
     const unprocessedCount = this.inputBuffer.filter(s => s.sequence > lastProcessedInput).length;
     if (unprocessedCount > 0) {
-      console.log(`🔄 Reconciling ${unprocessedCount} unprocessed inputs`);
+
     }
     
     // Update acknowledged input

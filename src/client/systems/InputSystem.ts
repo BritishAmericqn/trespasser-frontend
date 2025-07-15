@@ -135,7 +135,7 @@ export class InputSystem implements IGameSystem {
       }
     });
 
-    console.log('InputSystem initialized - sending input at 60Hz with weapon controls');
+
   }
 
   update(deltaTime: number): void {
@@ -207,7 +207,7 @@ export class InputSystem implements IGameSystem {
     // Include position every 30 frames (0.5 seconds) for sync
     if (this.sequence % 30 === 0) {
       this.inputState.position = { ...this.playerPosition };
-      console.log('📍 Position sync included in input:', this.inputState.position);
+
     } else {
       // Don't send position every frame to save bandwidth
       delete this.inputState.position;
@@ -314,7 +314,7 @@ export class InputSystem implements IGameSystem {
     const weapon = this.weaponSlots[this.currentWeapon];
     if (!weapon) return;
     
-    console.log(`🔫 Firing weapon: ${weapon}`);
+    
     
     // Decrease ammo locally for immediate feedback
     this.scene.events.emit('weapon:ammo:decrease', {
@@ -336,30 +336,13 @@ export class InputSystem implements IGameSystem {
       sequence: this.sequence++
     });
     
-    // Debug logging with timing info
-    console.log('🎯 WEAPON FIRE DEBUG:', {
-      playerPos: this.playerPosition,
-      mousePos: { x: this.inputState.mouse.x, y: this.inputState.mouse.y },
-      rotation: this.playerRotation,
-      rotationDegrees: (this.playerRotation * 180 / Math.PI).toFixed(1) + '°',
-      expectedHit: {
-        x: this.playerPosition.x + Math.cos(this.playerRotation) * 100,
-        y: this.playerPosition.y + Math.sin(this.playerRotation) * 100
-      },
-      timing: 'Deferred to update cycle for accurate position'
-    });
-    
-    // Additional coordinate system debug
-    console.log('🎮 COORDINATE SYSTEM CHECK:', {
-      inputSystemPos: this.playerPosition,
-      gameScenePos: (this.scene as any).playerPosition,
-      positionsMatch: JSON.stringify(this.playerPosition) === JSON.stringify((this.scene as any).playerPosition)
-    });
+    // Concise weapon fire logging
+    console.log(`🔫 FIRING ${weapon} from (${this.playerPosition.x},${this.playerPosition.y}) → (${targetPosition.x},${targetPosition.y}) angle: ${(this.playerRotation * 180 / Math.PI).toFixed(0)}°`);
   }
 
   private handleADSToggle(): void {
     this.isADS = !this.isADS;
-    console.log(`🎯 ADS ${this.isADS ? 'ON' : 'OFF'}`);
+
     
     // Send ADS toggle event
     this.scene.events.emit('ads:toggle', {
@@ -385,7 +368,7 @@ export class InputSystem implements IGameSystem {
     if (gPressed && this.grenadeChargeStart === 0) {
       // Start charging
       this.grenadeChargeStart = Date.now();
-      console.log('💣 Grenade charging started');
+
     } else if (!gPressed && this.grenadeChargeStart > 0) {
       // Release grenade
       this.throwGrenade();
@@ -407,7 +390,7 @@ export class InputSystem implements IGameSystem {
       const weapon = this.weaponSlots[this.currentWeapon];
       if (!weapon) return;
       
-      console.log(`🔄 Reloading weapon: ${weapon}`);
+
       
       // Send reload event
       this.scene.events.emit('weapon:reload', {
@@ -423,7 +406,7 @@ export class InputSystem implements IGameSystem {
     
     if (!toWeapon) return;
     
-    console.log(`🔀 Switching from ${fromWeapon} to ${toWeapon}`);
+    
     
     this.currentWeapon = slot;
     
@@ -445,7 +428,7 @@ export class InputSystem implements IGameSystem {
     const chargeDuration = Date.now() - this.grenadeChargeStart;
     this.grenadeChargeLevel = Math.min(5, Math.floor(chargeDuration / 200) + 1);
     
-    console.log(`💥 Throwing grenade with charge level: ${this.grenadeChargeLevel}`);
+    
     
     // Send grenade throw event
     this.scene.events.emit('grenade:throw', {
