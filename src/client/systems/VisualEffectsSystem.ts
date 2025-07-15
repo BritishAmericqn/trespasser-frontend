@@ -8,12 +8,32 @@ interface BulletTrail {
   startAlpha: number;
 }
 
+interface Projectile {
+  id: string;
+  type: 'rocket' | 'grenade';
+  position: { x: number; y: number };
+  velocity: { x: number; y: number };
+  trail: Phaser.GameObjects.Graphics;
+  startTime: number;
+  lifetime: number;
+  lastSmokeTime?: number; // Track when we last spawned smoke
+}
+
+interface PendingShot {
+  sequence: number;
+  weaponType: string;
+  startPosition: { x: number; y: number };
+  timestamp: number;
+}
+
 export class VisualEffectsSystem implements IGameSystem {
   private scene: Phaser.Scene;
   private muzzleFlashes: PhaserMuzzleFlash[] = [];
   private hitMarkers: Phaser.GameObjects.Graphics[] = [];
   private particles: Phaser.GameObjects.Graphics[] = [];
   private bulletTrails: BulletTrail[] = [];
+  private projectiles: Map<string, Projectile> = new Map();
+  private pendingShots: Map<string, PendingShot> = new Map(); // Track shots waiting for backend response
 
   constructor(scene: Phaser.Scene) {
     this.scene = scene;
@@ -43,6 +63,9 @@ export class VisualEffectsSystem implements IGameSystem {
 
     // Update bullet trails
     this.updateBulletTrails();
+
+    // Update projectiles
+    this.updateProjectiles(deltaTime);
   }
 
   destroy(): void {
@@ -58,6 +81,11 @@ export class VisualEffectsSystem implements IGameSystem {
     this.bulletTrails.forEach(trail => trail.line.destroy());
     this.bulletTrails = [];
     
+    this.projectiles.forEach(projectile => projectile.trail.destroy());
+    this.projectiles.clear();
+
+    this.pendingShots.clear();
+    
     this.removeBackendEventListeners();
     this.removeLocalEventListeners();
   }
@@ -65,15 +93,9 @@ export class VisualEffectsSystem implements IGameSystem {
   private setupBackendEventListeners(): void {
     // Listen for weapon events from backend
     this.scene.events.on('backend:weapon:fired', (data: any) => {
-      // Log only essential hit detection info
-      if (data.hitPosition) {
-        console.log(`🔫 SHOT: ${data.weaponType} from (${data.position?.x},${data.position?.y}) → hit at (${data.hitPosition.x},${data.hitPosition.y})`);
-      }
-      this.showMuzzleFlash(data.position, data.direction);
-      
-      // Show bullet trail to where it actually hit (from backend)
-      if (data.startPosition && data.hitPosition) {
-        this.showBulletTrail(data.startPosition, data.hitPosition, data.weaponType);
+      // For now, just show muzzle flash since backend doesn't send hit data properly
+      if (data.position) {
+        this.showMuzzleFlash(data.position, data.direction);
       }
     });
 
@@ -81,21 +103,44 @@ export class VisualEffectsSystem implements IGameSystem {
       console.log(`🎯 HIT: Player at (${data.position?.x},${data.position?.y})`);
       this.showHitMarker(data.position);
       
-      // Show bullet trail to hit point
-      if (data.startPosition && data.hitPosition) {
-        this.showBulletTrail(data.startPosition, data.hitPosition, data.weaponType);
+      // Update trail to actual hit position if we have the data
+      if (data.startPosition && data.position) {
+        this.showBulletTrail(data.startPosition, data.position, data.weaponType);
       }
     });
 
     this.scene.events.on('backend:weapon:miss', (data: any) => {
-      if (data.position) {
-        console.log(`❌ MISS: Wall hit at (${data.position.x},${data.position.y})`);
-      }
-      this.showImpactEffect(data.position, data.direction);
+      console.log(`🔥 BACKEND EVENT RECEIVED: weapon:miss`, data);
       
-      // Show bullet trail to miss point
-      if (data.startPosition && data.hitPosition) {
-        this.showBulletTrail(data.startPosition, data.hitPosition, data.weaponType);
+      // Find the pending shot for this player
+      let pendingShot: PendingShot | undefined;
+      let pendingKey: string | undefined;
+      
+      // Try to find a matching pending shot
+      for (const [key, shot] of this.pendingShots.entries()) {
+        if (key.startsWith(data.playerId)) {
+          pendingShot = shot;
+          pendingKey = key;
+          break;
+        }
+      }
+      
+      if (pendingShot && pendingKey) {
+        // Calculate hit point based on direction from backend
+        const maxRange = 500;
+        const hitX = pendingShot.startPosition.x + Math.cos(data.direction) * maxRange;
+        const hitY = pendingShot.startPosition.y + Math.sin(data.direction) * maxRange;
+        const hitPosition = { x: hitX, y: hitY };
+        
+        // Show the trail from start to calculated end
+        this.showBulletTrail(pendingShot.startPosition, hitPosition, pendingShot.weaponType);
+        this.pendingShots.delete(pendingKey);
+        
+        // Show impact effect at the calculated position
+        this.showImpactEffect(hitPosition, data.direction);
+      } else if (data.position) {
+        // Fallback: just show impact effect at the position provided
+        this.showImpactEffect(data.position, data.direction);
       }
     });
 
@@ -104,17 +149,35 @@ export class VisualEffectsSystem implements IGameSystem {
         console.log(`🧱 WALL DAMAGED: ${data.wallId} at (${data.position.x},${data.position.y})`);
       }
       this.showWallDamageEffect(data.position, data.material || 'concrete');
-      // Also show hit marker for wall hits
       this.showHitMarker(data.position);
       
-      // Show bullet trail to wall hit point
-      if (data.startPosition && data.hitPosition) {
-        this.showBulletTrail(data.startPosition, data.hitPosition, data.weaponType);
+      // Show trail to actual wall hit position
+      if (data.playerId) {
+        const pendingKey = `${data.playerId}_${data.weaponType || 'rifle'}`;
+        const pendingShot = this.pendingShots.get(pendingKey);
+        
+        if (pendingShot && data.position) {
+          this.showBulletTrail(pendingShot.startPosition, data.position, pendingShot.weaponType);
+          this.pendingShots.delete(pendingKey);
+        }
       }
     });
 
+    // Handle projectile creation and updates
+    this.scene.events.on('backend:projectile:created', (data: any) => {
+      console.log(`🚀 PROJECTILE CREATED: ${data.type} at (${data.position.x},${data.position.y})`);
+      this.createProjectile(data);
+    });
+
+    this.scene.events.on('backend:projectile:updated', (data: any) => {
+      this.updateProjectilePosition(data.id, data.position);
+    });
+
+    this.scene.events.on('backend:projectile:exploded', (data: any) => {
+      this.handleProjectileExplosion(data.id, data.position, data.radius);
+    });
+
     this.scene.events.on('backend:explosion:created', (data: any) => {
-      
       // Show authoritative explosion (overrides client prediction)
       this.showExplosionEffect(data.position, data.radius);
       
@@ -132,35 +195,54 @@ export class VisualEffectsSystem implements IGameSystem {
     this.scene.events.on('weapon:fire', (data: any) => {
       this.showMuzzleFlash(data.position, data.direction);
       
+      // Store pending shot info for backend response matching
+      const socket = (this.scene as any).networkSystem?.getSocket();
+      if (socket && socket.id) {
+        const pendingKey = `${socket.id}_${data.weaponType}`;
+        this.pendingShots.set(pendingKey, {
+          sequence: data.sequence,
+          weaponType: data.weaponType,
+          startPosition: { ...data.position },
+          timestamp: data.timestamp
+        });
+
+        // Clean up old pending shots after 1 second
+        this.scene.time.delayedCall(1000, () => {
+          this.pendingShots.delete(pendingKey);
+        });
+      }
+      
       // Handle different weapon types differently
       if (data.weaponType === 'grenade' || data.weaponType === 'rocket') {
-        // Explosives: Show trail and explosion on impact
-        const hitPoint = this.calculateBulletHitPoint(data.position, data.targetPosition);
-        this.showBulletTrail(data.position, hitPoint, data.weaponType);
-        
-        // Show immediate explosion effect (client-side prediction)
-        const explosionRadius = data.weaponType === 'rocket' ? 50 : 40;
-        this.showExplosionEffect(hitPoint, explosionRadius);
-        
-        // Show wall damage if it hit a wall
-        const hitWall = this.isTargetDifferentFromMouse(hitPoint, data.targetPosition);
-        if (hitWall) {
-          this.showWallDamageEffect(hitPoint, 'concrete');
-          console.log(`💥 ${data.weaponType} HIT WALL (explosion) at (${hitPoint.x},${hitPoint.y})`);
-        }
+        // For projectiles, don't show immediate trail - wait for backend projectile creation
+        // Just show the launch effect
+        console.log(`🚀 ${data.weaponType} LAUNCHED from (${data.position.x},${data.position.y})`);
         
       } else {
-        // Hitscan weapons: Show trail and impact effects
-        const hitPoint = this.calculateBulletHitPoint(data.position, data.targetPosition);
-        this.showBulletTrail(data.position, hitPoint, data.weaponType);
+        // For hitscan weapons, show a temporary trail for immediate feedback
+        // This will be replaced/updated when backend responds
+        const tempHitPoint = this.calculateBulletHitPoint(data.position, data.targetPosition);
         
-        // If bullet hit a wall, show wall damage effect
-        const hitWall = this.isTargetDifferentFromMouse(hitPoint, data.targetPosition);
-        if (hitWall) {
-          this.showWallDamageEffect(hitPoint, 'concrete');
-          const distance = Math.hypot(hitPoint.x - data.position.x, hitPoint.y - data.position.y);
-          console.log(`🔫 ${data.weaponType} HIT WALL at (${hitPoint.x},${hitPoint.y}) - distance: ${distance.toFixed(0)}px`);
-        }
+        // Create a temporary faded trail
+        const tempTrail = this.scene.add.graphics();
+        tempTrail.setDepth(39); // Slightly behind real trails
+        tempTrail.lineStyle(1, 0xFFFFFF, 0.3); // Faded white line
+        tempTrail.beginPath();
+        tempTrail.moveTo(data.position.x, data.position.y);
+        tempTrail.lineTo(tempHitPoint.x, tempHitPoint.y);
+        tempTrail.strokePath();
+        
+        // Fade out the temporary trail
+        this.scene.tweens.add({
+          targets: tempTrail,
+          alpha: 0,
+          duration: 500,
+          onComplete: () => {
+            tempTrail.destroy();
+          }
+        });
+        
+        console.log(`🔫 ${data.weaponType} FIRED - showing temporary trail, waiting for backend confirmation`);
       }
     });
   }
@@ -171,6 +253,9 @@ export class VisualEffectsSystem implements IGameSystem {
     this.scene.events.off('backend:weapon:miss');
     this.scene.events.off('backend:wall:damaged');
     this.scene.events.off('backend:explosion:created');
+    this.scene.events.off('backend:projectile:created');
+    this.scene.events.off('backend:projectile:updated');
+    this.scene.events.off('backend:projectile:exploded');
   }
 
   private removeLocalEventListeners(): void {
@@ -495,6 +580,154 @@ export class VisualEffectsSystem implements IGameSystem {
     this.bulletTrails.forEach(trail => trail.line.destroy());
     this.bulletTrails = [];
     
+    // Clear projectiles
+    this.projectiles.forEach(projectile => projectile.trail.destroy());
+    this.projectiles.clear();
+
+    this.pendingShots.clear();
+    
     console.log('All visual effects cleared');
+  }
+
+  private createProjectile(data: any): void {
+    const projectile: Projectile = {
+      id: data.id,
+      type: data.type,
+      position: { x: data.position.x, y: data.position.y },
+      velocity: { x: data.velocity?.x || 0, y: data.velocity?.y || 0 },
+      trail: this.scene.add.graphics(),
+      startTime: Date.now(),
+      lifetime: data.lifetime || 5000 // Default 5 seconds
+    };
+    
+    projectile.trail.setDepth(40);
+    this.projectiles.set(projectile.id, projectile);
+    
+    console.log(`🚀 Projectile ${projectile.type} (${projectile.id}) created at (${projectile.position.x.toFixed(1)}, ${projectile.position.y.toFixed(1)})`);
+  }
+
+  private updateProjectilePosition(id: string, position: { x: number; y: number }): void {
+    const projectile = this.projectiles.get(id);
+    if (projectile) {
+      const oldPos = { ...projectile.position };
+      projectile.position = { ...position };
+      
+      // Draw trail segment from old position to new position
+      this.drawProjectileTrailSegment(projectile, oldPos, position);
+    }
+  }
+
+  private drawProjectileTrailSegment(projectile: Projectile, fromPos: { x: number; y: number }, toPos: { x: number; y: number }): void {
+    // Different trail styles for different projectile types
+    let color = 0xFFFFFF;
+    let width = 2;
+    
+    switch (projectile.type) {
+      case 'rocket':
+        color = 0xFF0000; // Red trail with smoke
+        width = 3;
+        break;
+      case 'grenade':
+        color = 0xFF4500; // Orange trail
+        width = 2;
+        break;
+    }
+    
+    // Draw the trail segment
+    projectile.trail.lineStyle(width, color, 0.8);
+    projectile.trail.beginPath();
+    projectile.trail.moveTo(fromPos.x, fromPos.y);
+    projectile.trail.lineTo(toPos.x, toPos.y);
+    projectile.trail.strokePath();
+    
+    // Add smoke particles for rockets (throttled)
+    if (projectile.type === 'rocket') {
+      const now = Date.now();
+      if (!projectile.lastSmokeTime || now - projectile.lastSmokeTime > 50) { // Every 50ms
+        this.addRocketSmokeParticle(toPos);
+        projectile.lastSmokeTime = now;
+      }
+    }
+  }
+
+  private addRocketSmokeParticle(position: { x: number; y: number }): void {
+    const smoke = this.scene.add.graphics();
+    smoke.setDepth(35); // Behind the trail
+    smoke.fillStyle(0x808080, 0.4); // Gray smoke, more transparent
+    smoke.fillCircle(0, 0, 1.5); // Smaller smoke particle
+    
+    // Set initial position with small random offset
+    smoke.x = position.x + (Math.random() - 0.5) * 2;
+    smoke.y = position.y + (Math.random() - 0.5) * 2;
+    
+    // Add some random drift motion
+    const driftX = (Math.random() - 0.5) * 20;
+    const driftY = Math.random() * 10 + 5; // Mostly downward drift
+    
+    // Fade out, expand, and drift the smoke
+    this.scene.tweens.add({
+      targets: smoke,
+      alpha: 0,
+      scaleX: 3,
+      scaleY: 3,
+      x: smoke.x + driftX,
+      y: smoke.y + driftY,
+      duration: 1000,
+      ease: 'Power2',
+      onComplete: () => {
+        smoke.destroy();
+      }
+    });
+  }
+
+  private handleProjectileExplosion(id: string, position: { x: number; y: number }, radius: number): void {
+    const projectile = this.projectiles.get(id);
+    if (projectile) {
+      // Fade out the trail
+      this.scene.tweens.add({
+        targets: projectile.trail,
+        alpha: 0,
+        duration: 200,
+        onComplete: () => {
+          projectile.trail.destroy();
+          this.projectiles.delete(id);
+        }
+      });
+      
+      // Show explosion at the final position
+      const explosionRadius = projectile.type === 'rocket' ? radius || 50 : radius || 40;
+      this.showExplosionEffect(position, explosionRadius);
+      
+      console.log(`💥 ${projectile.type} exploded at (${position.x.toFixed(1)}, ${position.y.toFixed(1)})`);
+    }
+  }
+
+  private updateProjectiles(deltaTime: number): void {
+    const currentTime = Date.now();
+    
+    this.projectiles.forEach((projectile, id) => {
+      const elapsed = currentTime - projectile.startTime;
+      
+      // Check if projectile has expired
+      if (elapsed >= projectile.lifetime) {
+        // Projectile timed out - remove it
+        this.scene.tweens.add({
+          targets: projectile.trail,
+          alpha: 0,
+          duration: 200,
+          onComplete: () => {
+            projectile.trail.destroy();
+            this.projectiles.delete(id);
+          }
+        });
+      } else {
+        // Update trail fade based on age
+        const fadeStart = projectile.lifetime * 0.7; // Start fading at 70% lifetime
+        if (elapsed > fadeStart) {
+          const fadeProgress = (elapsed - fadeStart) / (projectile.lifetime - fadeStart);
+          projectile.trail.setAlpha(1 - fadeProgress * 0.5); // Fade to 50% alpha
+        }
+      }
+    });
   }
 } 

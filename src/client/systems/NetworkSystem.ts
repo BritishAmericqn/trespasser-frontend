@@ -57,7 +57,7 @@ export class NetworkSystem implements IGameSystem {
     // Add debug listener for weapon/combat events only
     this.socket.onAny((eventName, data) => {
       // Only log weapon/combat related events, not movement/game state
-      if (eventName.includes('weapon') || eventName.includes('wall') || eventName.includes('explosion') || eventName.includes('hit')) {
+      if (eventName.includes('weapon') || eventName.includes('wall') || eventName.includes('explosion') || eventName.includes('hit') || eventName.includes('projectile')) {
         console.log(`🔥 BACKEND EVENT RECEIVED: ${eventName}`, data);
         
         // Special debug for wall events
@@ -152,16 +152,16 @@ export class NetworkSystem implements IGameSystem {
       this.scene.events.emit('backend:projectile:created', data);
     });
 
+    this.socket.on('projectile:updated', (data: any) => {
+      this.scene.events.emit('backend:projectile:updated', data);
+    });
+
+    this.socket.on('projectile:exploded', (data: any) => {
+      this.scene.events.emit('backend:projectile:exploded', data);
+    });
+
     this.socket.on('explosion:created', (data: any) => {
       this.scene.events.emit('backend:explosion:created', data);
-    });
-    
-    // DEBUG: Listen to ALL events from backend
-    this.socket.onAny((eventName: string, ...args: any[]) => {
-      // Only log weapon/hit related events
-      if (eventName.includes('weapon') || eventName.includes('wall') || eventName.includes('hit') || eventName.includes('damage')) {
-        console.log(`🔵 BACKEND EVENT: ${eventName}`, args[0]);
-      }
     });
   }
 
@@ -185,9 +185,7 @@ export class NetworkSystem implements IGameSystem {
       this.emit('weapon:reload', data);
     });
     
-    this.scene.events.on('grenade:throw', (data: any) => {
-      this.emit('grenade:throw', data);
-    });
+    // grenade:throw event removed - grenades now use weapon:fire
     
     this.scene.events.on('ads:toggle', (data: any) => {
       this.emit('ads:toggle', data);

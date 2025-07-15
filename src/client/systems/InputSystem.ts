@@ -50,6 +50,7 @@ export class InputSystem implements IGameSystem {
   private lastMouseState: { left: boolean; right: boolean } = { left: false, right: false };
   private pendingWeaponFire: boolean = false;
   private pendingADSToggle: boolean = false;
+  private isChargingGrenade: boolean = false; // Track if we're charging via left-click
 
   constructor(scene: Phaser.Scene) {
     this.scene = scene;
@@ -115,8 +116,17 @@ export class InputSystem implements IGameSystem {
       this.inputState.mouse.buttons = pointer.buttons;
       if (pointer.leftButtonDown()) {
         this.inputState.mouse.leftPressed = true;
-        // Defer weapon fire until update cycle to ensure position is current
-        this.pendingWeaponFire = true;
+        
+        // Check if we should start grenade charging
+        const weapon = this.weaponSlots[this.currentWeapon];
+        if (weapon === 'grenade' && this.grenadeChargeStart === 0) {
+          // Start grenade charging instead of immediate fire
+          this.grenadeChargeStart = Date.now();
+          this.isChargingGrenade = true;
+        } else {
+          // Normal weapon fire for non-grenades
+          this.pendingWeaponFire = true;
+        }
       }
       if (pointer.rightButtonDown()) {
         this.inputState.mouse.rightPressed = true;
@@ -129,6 +139,12 @@ export class InputSystem implements IGameSystem {
       this.inputState.mouse.buttons = pointer.buttons;
       if (pointer.leftButtonReleased()) {
         this.inputState.mouse.leftReleased = true;
+        
+        // Check if we were charging a grenade
+        if (this.isChargingGrenade && this.grenadeChargeStart > 0) {
+          this.throwGrenade();
+          this.isChargingGrenade = false;
+        }
       }
       if (pointer.rightButtonReleased()) {
         this.inputState.mouse.rightReleased = true;
@@ -314,7 +330,8 @@ export class InputSystem implements IGameSystem {
     const weapon = this.weaponSlots[this.currentWeapon];
     if (!weapon) return;
     
-    
+    // Skip if it's a grenade - handled by charging system
+    if (weapon === 'grenade') return;
     
     // Decrease ammo locally for immediate feedback
     this.scene.events.emit('weapon:ammo:decrease', {
@@ -364,16 +381,19 @@ export class InputSystem implements IGameSystem {
 
   private handleGrenadeCharging(): void {
     const gPressed = this.inputState.keys.g;
+    const isCharging = this.grenadeChargeStart > 0;
     
-    if (gPressed && this.grenadeChargeStart === 0) {
-      // Start charging
+    // G key can always charge/throw grenades regardless of selected weapon
+    if (gPressed && !isCharging && !this.isChargingGrenade) {
+      // Start charging via G key
       this.grenadeChargeStart = Date.now();
-
-    } else if (!gPressed && this.grenadeChargeStart > 0) {
-      // Release grenade
+    } else if (!gPressed && isCharging && !this.isChargingGrenade) {
+      // Release grenade via G key (only if not charging via mouse)
       this.throwGrenade();
-    } else if (gPressed && this.grenadeChargeStart > 0) {
-      // Update charge level
+    }
+    
+    // Update charge level if we're charging (either via G or left-click)
+    if (isCharging) {
       const chargeDuration = Date.now() - this.grenadeChargeStart;
       const newChargeLevel = Math.min(5, Math.floor(chargeDuration / 200) + 1);
       
@@ -419,25 +439,40 @@ export class InputSystem implements IGameSystem {
   }
 
   private throwGrenade(): void {
-    if (this.weaponSlots[this.currentWeapon] !== 'grenade') {
-      this.grenadeChargeStart = 0;
-      this.grenadeChargeLevel = 0;
-      return;
-    }
-    
+    // Calculate charge level
     const chargeDuration = Date.now() - this.grenadeChargeStart;
     this.grenadeChargeLevel = Math.min(5, Math.floor(chargeDuration / 200) + 1);
     
+    // Switch to grenade if using G key and not already selected
+    const wasUsingGKey = !this.isChargingGrenade;
+    if (wasUsingGKey && this.weaponSlots[this.currentWeapon] !== 'grenade') {
+      this.switchWeapon(3); // Switch to grenade slot
+    }
     
-    
-    // Send grenade throw event
-    this.scene.events.emit('grenade:throw', {
-      position: this.playerPosition,
-      direction: this.playerRotation, // Use stored rotation
-      chargeLevel: this.grenadeChargeLevel,
-      timestamp: Date.now()
+    // Decrease ammo locally for immediate feedback
+    this.scene.events.emit('weapon:ammo:decrease', {
+      weaponType: 'grenade',
+      amount: 1
     });
     
+    // Calculate target position for projectile
+    const targetPosition = { x: this.inputState.mouse.x, y: this.inputState.mouse.y };
+    
+    // Use weapon:fire event to ensure backend creates projectile tracking
+    this.scene.events.emit('weapon:fire', {
+      weaponType: 'grenade',
+      position: this.playerPosition,
+      targetPosition: targetPosition,
+      direction: this.playerRotation,
+      chargeLevel: this.grenadeChargeLevel, // Include charge level
+      isADS: false,
+      timestamp: Date.now(),
+      sequence: this.sequence++
+    });
+    
+    console.log(`💣 THROWING GRENADE charge:${this.grenadeChargeLevel} from (${this.playerPosition.x},${this.playerPosition.y}) → (${targetPosition.x},${targetPosition.y})`);
+    
+    // Reset charge state
     this.grenadeChargeStart = 0;
     this.grenadeChargeLevel = 0;
     this.scene.events.emit('grenade:charge:update', 0);
