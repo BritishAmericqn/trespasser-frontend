@@ -56,6 +56,25 @@ export class NetworkSystem implements IGameSystem {
   private setupSocketListeners(): void {
     if (!this.socket) return;
 
+    // Add debug listener for weapon/combat events only
+    this.socket.onAny((eventName, data) => {
+      // Only log weapon/combat related events, not movement/game state
+      if (eventName.includes('weapon') || eventName.includes('wall') || eventName.includes('explosion') || eventName.includes('hit')) {
+        console.log(`🔥 BACKEND EVENT RECEIVED: ${eventName}`, data);
+        
+        // Special debug for wall events
+        if (eventName === 'wall:damaged') {
+          console.log('🧱 WALL DAMAGE EVENT DETAILS:', {
+            wallId: data.wallId,
+            position: data.position,
+            damage: data.damage,
+            newHealth: data.newHealth,
+            isDestroyed: data.isDestroyed
+          });
+        }
+      }
+    });
+
     this.socket.on('connect', () => {
       this.isConnected = true;
       this.connectionAttempts = 0;
@@ -84,6 +103,35 @@ export class NetworkSystem implements IGameSystem {
 
     // Listen for game state updates from server
     this.socket.on(EVENTS.GAME_STATE, (gameState: any) => {
+      // Debug player positions from backend
+      if (gameState.players) {
+        const playerCount = Object.keys(gameState.players).length;
+        if (playerCount > 0) {
+          console.log('📊 GAME STATE UPDATE:', {
+            playerCount,
+            players: gameState.players,
+            mySocketId: this.socket?.id
+          });
+          
+          // Log specific player data for debugging
+          if (this.socket?.id) {
+            const myPlayer = gameState.players[this.socket.id];
+            if (myPlayer) {
+            console.log('🎮 MY PLAYER DATA:', myPlayer);
+            console.log('🎮 Player structure keys:', Object.keys(myPlayer));
+            if (myPlayer.transform) {
+              console.log('🎮 Transform data:', myPlayer.transform);
+            }
+            if (myPlayer.position) {
+              console.log('🎮 Direct position:', myPlayer.position);
+            }
+            if (typeof myPlayer.x === 'number' && typeof myPlayer.y === 'number') {
+              console.log('🎮 Direct x,y:', { x: myPlayer.x, y: myPlayer.y });
+            }
+          }
+          }
+        }
+      }
       this.scene.events.emit('network:gameState', gameState);
     });
 
@@ -95,13 +143,109 @@ export class NetworkSystem implements IGameSystem {
     this.socket.on(EVENTS.PLAYER_LEFT, (playerData: any) => {
       this.scene.events.emit('network:playerLeft', playerData);
     });
+
+    // Listen for weapon events from backend
+    this.socket.on('weapon:fired', (data: any) => {
+      console.log('🔫 Backend weapon:fired event received:', data);
+      this.scene.events.emit('backend:weapon:fired', data);
+    });
+
+    this.socket.on('weapon:hit', (data: any) => {
+      console.log('🎯 Backend weapon:hit event received:', data);
+      this.scene.events.emit('backend:weapon:hit', data);
+    });
+
+    this.socket.on('weapon:miss', (data: any) => {
+      console.log('❌ Backend weapon:miss event received');
+      this.scene.events.emit('backend:weapon:miss', data);
+    });
+
+    this.socket.on('weapon:reloaded', (data: any) => {
+      console.log('🔄 Backend weapon:reloaded event received');
+      this.scene.events.emit('backend:weapon:reloaded', data);
+    });
+
+    this.socket.on('weapon:switched', (data: any) => {
+      console.log('🔀 Backend weapon:switched event received');
+      this.scene.events.emit('backend:weapon:switched', data);
+    });
+
+    this.socket.on('player:damaged', (data: any) => {
+      console.log('💔 Backend player:damaged event received');
+      this.scene.events.emit('backend:player:damaged', data);
+    });
+
+    this.socket.on('player:killed', (data: any) => {
+      console.log('💀 Backend player:killed event received');
+      this.scene.events.emit('backend:player:killed', data);
+    });
+
+    this.socket.on('wall:damaged', (data: any) => {
+      console.log('🧱 Backend wall:damaged event received:', data);
+      console.log('🧱 EXPECTED FORMAT: wallId, sliceIndex, newHealth, isDestroyed, position');
+      this.scene.events.emit('backend:wall:damaged', data);
+    });
+
+    this.socket.on('wall:destroyed', (data: any) => {
+      console.log('💥 Backend wall:destroyed event received:', data);
+      this.scene.events.emit('backend:wall:destroyed', data);
+    });
+
+    this.socket.on('projectile:created', (data: any) => {
+      console.log('🚀 Backend projectile:created event received');
+      this.scene.events.emit('backend:projectile:created', data);
+    });
+
+    this.socket.on('explosion:created', (data: any) => {
+      console.log('💥 Backend explosion:created event received');
+      this.scene.events.emit('backend:explosion:created', data);
+    });
+    
+    // DEBUG: Listen to ALL events from backend
+    this.socket.onAny((eventName: string, ...args: any[]) => {
+      // Only log non-game:state events to reduce spam
+      if (eventName !== 'game:state') {
+        console.log(`🔵 BACKEND EVENT: ${eventName}`, args);
+        
+        // Check if any event has position data
+        if (args[0] && args[0].position) {
+          console.log(`📍 Position found in ${eventName}:`, args[0].position);
+        }
+      }
+    });
   }
 
   private setupEventListeners(): void {
     // Listen for input events from InputSystem
     this.scene.events.on(EVENTS.PLAYER_INPUT, (inputState: InputState) => {
-      console.log(`🎮 NetworkSystem received input event #${inputState.sequence}`);
+      // Input event logging removed to reduce console spam
       this.sendPlayerInput(inputState);
+    });
+    
+    // Listen for weapon events from InputSystem
+    this.scene.events.on('weapon:fire', (data: any) => {
+      console.log('🔫 NetworkSystem forwarding weapon:fire to backend');
+      this.emit('weapon:fire', data);
+    });
+    
+    this.scene.events.on('weapon:switch', (data: any) => {
+      console.log('🔀 NetworkSystem forwarding weapon:switch to backend');
+      this.emit('weapon:switch', data);
+    });
+    
+    this.scene.events.on('weapon:reload', (data: any) => {
+      console.log('🔄 NetworkSystem forwarding weapon:reload to backend');
+      this.emit('weapon:reload', data);
+    });
+    
+    this.scene.events.on('grenade:throw', (data: any) => {
+      console.log('💥 NetworkSystem forwarding grenade:throw to backend');
+      this.emit('grenade:throw', data);
+    });
+    
+    this.scene.events.on('ads:toggle', (data: any) => {
+      console.log('🎯 NetworkSystem forwarding ads:toggle to backend');
+      this.emit('ads:toggle', data);
     });
   }
 
@@ -113,7 +257,17 @@ export class NetworkSystem implements IGameSystem {
 
     try {
       this.inputsSent++;
-      console.log(`📤 SENDING to backend: '${EVENTS.PLAYER_INPUT}' #${inputState.sequence} (total sent: ${this.inputsSent})`);
+      // Add position tracking every 60 inputs (about 1 second at 60Hz)
+      if (this.inputsSent % 60 === 0) {
+        console.log('📡 INPUT TRACKING:', {
+          inputsSent: this.inputsSent,
+          currentInput: {
+            keys: inputState.keys,
+            mousePos: inputState.mouse,
+            sequence: inputState.sequence
+          }
+        });
+      }
       this.socket.emit(EVENTS.PLAYER_INPUT, inputState);
     } catch (error) {
       console.error('Failed to send player input:', error);

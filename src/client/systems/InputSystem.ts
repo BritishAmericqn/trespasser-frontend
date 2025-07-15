@@ -9,13 +9,25 @@ export interface InputState {
     d: boolean;
     shift: boolean;
     ctrl: boolean;
+    r: boolean;    // reload
+    g: boolean;    // grenade
+    '1': boolean;  // weapon slots
+    '2': boolean;
+    '3': boolean;
+    '4': boolean;
   };
   mouse: {
     x: number;
     y: number;
+    buttons: number;
+    leftPressed: boolean;  // NEW: track press events
+    rightPressed: boolean; // NEW: for ADS
+    leftReleased: boolean;
+    rightReleased: boolean;
   };
   sequence: number;
   timestamp: number;
+  position?: { x: number; y: number }; // NEW: Include position for sync
 }
 
 export class InputSystem implements IGameSystem {
@@ -26,7 +38,18 @@ export class InputSystem implements IGameSystem {
   private networkTimer: number = 0;
   private readonly NETWORK_RATE = 1000 / 60; // 60 times per second (16.67ms)
   private playerPosition: { x: number; y: number } = { x: 240, y: 135 }; // Default center
+  private playerRotation: number = 0; // Player's current rotation in radians
   private lastInputState: InputState | null = null;
+  
+  // Weapon-related properties
+  private weaponSlots: (string | null)[] = [null, 'rifle', 'pistol', 'grenade', 'rocket'];
+  private currentWeapon: number = 1;
+  private isADS: boolean = false;
+  private grenadeChargeStart: number = 0;
+  private grenadeChargeLevel: number = 0;
+  private lastMouseState: { left: boolean; right: boolean } = { left: false, right: false };
+  private pendingWeaponFire: boolean = false;
+  private pendingADSToggle: boolean = false;
 
   constructor(scene: Phaser.Scene) {
     this.scene = scene;
@@ -37,9 +60,23 @@ export class InputSystem implements IGameSystem {
         s: false,
         d: false,
         shift: false,
-        ctrl: false
+        ctrl: false,
+        r: false,
+        g: false,
+        '1': false,
+        '2': false,
+        '3': false,
+        '4': false
       },
-      mouse: { x: 0, y: 0 },
+      mouse: { 
+        x: 0, 
+        y: 0, 
+        buttons: 0,
+        leftPressed: false,
+        rightPressed: false,
+        leftReleased: false,
+        rightReleased: false
+      },
       sequence: 0,
       timestamp: 0
     };
@@ -53,16 +90,52 @@ export class InputSystem implements IGameSystem {
       s: Phaser.Input.Keyboard.KeyCodes.S,
       d: Phaser.Input.Keyboard.KeyCodes.D,
       shift: Phaser.Input.Keyboard.KeyCodes.SHIFT,
-      ctrl: Phaser.Input.Keyboard.KeyCodes.CTRL
+      ctrl: Phaser.Input.Keyboard.KeyCodes.CTRL,
+      r: Phaser.Input.Keyboard.KeyCodes.R,
+      g: Phaser.Input.Keyboard.KeyCodes.G,
+      one: Phaser.Input.Keyboard.KeyCodes.ONE,
+      two: Phaser.Input.Keyboard.KeyCodes.TWO,
+      three: Phaser.Input.Keyboard.KeyCodes.THREE,
+      four: Phaser.Input.Keyboard.KeyCodes.FOUR
     });
 
     // Set up mouse input
     this.scene.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
-      this.inputState.mouse.x = pointer.x;
-      this.inputState.mouse.y = pointer.y;
+      // Get world coordinates instead of screen coordinates
+      const worldPoint = this.scene.cameras.main.getWorldPoint(pointer.x, pointer.y);
+      this.inputState.mouse.x = Math.round(worldPoint.x);
+      this.inputState.mouse.y = Math.round(worldPoint.y);
+      
+      // Update player rotation based on mouse position
+      this.updatePlayerRotation();
     });
 
-    console.log('InputSystem initialized - sending input at 60Hz');
+    // Set up mouse button events
+    this.scene.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      this.inputState.mouse.buttons = pointer.buttons;
+      if (pointer.leftButtonDown()) {
+        this.inputState.mouse.leftPressed = true;
+        // Defer weapon fire until update cycle to ensure position is current
+        this.pendingWeaponFire = true;
+      }
+      if (pointer.rightButtonDown()) {
+        this.inputState.mouse.rightPressed = true;
+        // Defer ADS toggle until update cycle
+        this.pendingADSToggle = true;
+      }
+    });
+
+    this.scene.input.on('pointerup', (pointer: Phaser.Input.Pointer) => {
+      this.inputState.mouse.buttons = pointer.buttons;
+      if (pointer.leftButtonReleased()) {
+        this.inputState.mouse.leftReleased = true;
+      }
+      if (pointer.rightButtonReleased()) {
+        this.inputState.mouse.rightReleased = true;
+      }
+    });
+
+    console.log('InputSystem initialized - sending input at 60Hz with weapon controls');
   }
 
   update(deltaTime: number): void {
@@ -73,9 +146,41 @@ export class InputSystem implements IGameSystem {
     this.inputState.keys.d = this.keys.d.isDown;
     this.inputState.keys.shift = this.keys.shift.isDown;
     this.inputState.keys.ctrl = this.keys.ctrl.isDown;
+    this.inputState.keys.r = this.keys.r.isDown;
+    this.inputState.keys.g = this.keys.g.isDown;
+    this.inputState.keys['1'] = this.keys.one.isDown;
+    this.inputState.keys['2'] = this.keys.two.isDown;
+    this.inputState.keys['3'] = this.keys.three.isDown;
+    this.inputState.keys['4'] = this.keys.four.isDown;
+
+    // Handle weapon switching
+    this.handleWeaponSwitching();
+    
+    // Handle grenade charging
+    this.handleGrenadeCharging();
+    
+    // Handle reload
+    this.handleReload();
+
+    // Handle deferred actions (weapon fire, ADS) to ensure position is current
+    if (this.pendingWeaponFire) {
+      this.handleWeaponFire();
+      this.pendingWeaponFire = false;
+    }
+    
+    if (this.pendingADSToggle) {
+      this.handleADSToggle();
+      this.pendingADSToggle = false;
+    }
 
     // Update timestamp
     this.inputState.timestamp = Date.now();
+
+    // Reset press/release flags after processing
+    this.inputState.mouse.leftPressed = false;
+    this.inputState.mouse.rightPressed = false;
+    this.inputState.mouse.leftReleased = false;
+    this.inputState.mouse.rightReleased = false;
 
     // Send input to server at 60Hz
     this.networkTimer += deltaTime;
@@ -88,31 +193,25 @@ export class InputSystem implements IGameSystem {
   destroy(): void {
     // Clean up input listeners
     this.scene.input.off('pointermove');
+    this.scene.input.off('pointerdown');
+    this.scene.input.off('pointerup');
+    // Clear pending actions
+    this.pendingWeaponFire = false;
+    this.pendingADSToggle = false;
   }
 
   private sendInputToServer(): void {
     // Update sequence number
     this.inputState.sequence = this.sequence++;
 
-    // Add debug logging with explicit key states
-    const pressedKeys = Object.entries(this.inputState.keys)
-      .filter(([key, pressed]) => pressed)
-      .map(([key, pressed]) => key.toUpperCase())
-      .join(', ') || 'none';
-
-    console.log(`🎮 SENDING INPUT #${this.inputState.sequence}:`, {
-      pressedKeys: pressedKeys,
-      keys: {
-        w: this.inputState.keys.w,
-        a: this.inputState.keys.a,
-        s: this.inputState.keys.s,
-        d: this.inputState.keys.d,
-        shift: this.inputState.keys.shift,
-        ctrl: this.inputState.keys.ctrl
-      },
-      mouse: `${this.inputState.mouse.x}, ${this.inputState.mouse.y}`,
-      timestamp: this.inputState.timestamp
-    });
+    // Include position every 30 frames (0.5 seconds) for sync
+    if (this.sequence % 30 === 0) {
+      this.inputState.position = { ...this.playerPosition };
+      console.log('📍 Position sync included in input:', this.inputState.position);
+    } else {
+      // Don't send position every frame to save bandwidth
+      delete this.inputState.position;
+    }
 
     // Emit to NetworkSystem
     this.scene.events.emit(EVENTS.PLAYER_INPUT, this.inputState);
@@ -207,5 +306,191 @@ export class InputSystem implements IGameSystem {
   // Get forward direction for debugging
   getForwardDirectionForDebug(): 'w' | 'a' | 's' | 'd' {
     return this.getForwardDirection();
+  }
+
+  // ===== WEAPON HANDLING METHODS =====
+  
+  private handleWeaponFire(): void {
+    const weapon = this.weaponSlots[this.currentWeapon];
+    if (!weapon) return;
+    
+    console.log(`🔫 Firing weapon: ${weapon}`);
+    
+    // Decrease ammo locally for immediate feedback
+    this.scene.events.emit('weapon:ammo:decrease', {
+      weaponType: weapon,
+      amount: 1
+    });
+    
+    // Calculate target position for bullet trail
+    const targetPosition = { x: this.inputState.mouse.x, y: this.inputState.mouse.y };
+    
+    // Send weapon fire event to network system
+    this.scene.events.emit('weapon:fire', {
+      weaponType: weapon,
+      position: this.playerPosition,
+      targetPosition: targetPosition,
+      direction: this.playerRotation, // Use stored rotation instead of recalculating
+      isADS: this.isADS,
+      timestamp: Date.now(),
+      sequence: this.sequence++
+    });
+    
+    // Debug logging with timing info
+    console.log('🎯 WEAPON FIRE DEBUG:', {
+      playerPos: this.playerPosition,
+      mousePos: { x: this.inputState.mouse.x, y: this.inputState.mouse.y },
+      rotation: this.playerRotation,
+      rotationDegrees: (this.playerRotation * 180 / Math.PI).toFixed(1) + '°',
+      expectedHit: {
+        x: this.playerPosition.x + Math.cos(this.playerRotation) * 100,
+        y: this.playerPosition.y + Math.sin(this.playerRotation) * 100
+      },
+      timing: 'Deferred to update cycle for accurate position'
+    });
+    
+    // Additional coordinate system debug
+    console.log('🎮 COORDINATE SYSTEM CHECK:', {
+      inputSystemPos: this.playerPosition,
+      gameScenePos: (this.scene as any).playerPosition,
+      positionsMatch: JSON.stringify(this.playerPosition) === JSON.stringify((this.scene as any).playerPosition)
+    });
+  }
+
+  private handleADSToggle(): void {
+    this.isADS = !this.isADS;
+    console.log(`🎯 ADS ${this.isADS ? 'ON' : 'OFF'}`);
+    
+    // Send ADS toggle event
+    this.scene.events.emit('ads:toggle', {
+      isADS: this.isADS,
+      timestamp: Date.now()
+    });
+  }
+
+  private handleWeaponSwitching(): void {
+    // Check for weapon switching (1-4 keys)
+    for (let i = 1; i <= 4; i++) {
+      const keyPressed = this.inputState.keys[i.toString() as '1' | '2' | '3' | '4'];
+      if (keyPressed && this.currentWeapon !== i) {
+        this.switchWeapon(i);
+        break;
+      }
+    }
+  }
+
+  private handleGrenadeCharging(): void {
+    const gPressed = this.inputState.keys.g;
+    
+    if (gPressed && this.grenadeChargeStart === 0) {
+      // Start charging
+      this.grenadeChargeStart = Date.now();
+      console.log('💣 Grenade charging started');
+    } else if (!gPressed && this.grenadeChargeStart > 0) {
+      // Release grenade
+      this.throwGrenade();
+    } else if (gPressed && this.grenadeChargeStart > 0) {
+      // Update charge level
+      const chargeDuration = Date.now() - this.grenadeChargeStart;
+      const newChargeLevel = Math.min(5, Math.floor(chargeDuration / 200) + 1);
+      
+      // Only emit update if charge level changed
+      if (newChargeLevel !== this.grenadeChargeLevel) {
+        this.grenadeChargeLevel = newChargeLevel;
+        this.scene.events.emit('grenade:charge:update', this.grenadeChargeLevel);
+      }
+    }
+  }
+
+  private handleReload(): void {
+    if (this.keys.r.isDown && !this.lastInputState?.keys.r) {
+      const weapon = this.weaponSlots[this.currentWeapon];
+      if (!weapon) return;
+      
+      console.log(`🔄 Reloading weapon: ${weapon}`);
+      
+      // Send reload event
+      this.scene.events.emit('weapon:reload', {
+        weaponType: weapon,
+        timestamp: Date.now()
+      });
+    }
+  }
+
+  private switchWeapon(slot: number): void {
+    const fromWeapon = this.weaponSlots[this.currentWeapon];
+    const toWeapon = this.weaponSlots[slot];
+    
+    if (!toWeapon) return;
+    
+    console.log(`🔀 Switching from ${fromWeapon} to ${toWeapon}`);
+    
+    this.currentWeapon = slot;
+    
+    // Send weapon switch event
+    this.scene.events.emit('weapon:switch', {
+      fromWeapon,
+      toWeapon,
+      timestamp: Date.now()
+    });
+  }
+
+  private throwGrenade(): void {
+    if (this.weaponSlots[this.currentWeapon] !== 'grenade') {
+      this.grenadeChargeStart = 0;
+      this.grenadeChargeLevel = 0;
+      return;
+    }
+    
+    const chargeDuration = Date.now() - this.grenadeChargeStart;
+    this.grenadeChargeLevel = Math.min(5, Math.floor(chargeDuration / 200) + 1);
+    
+    console.log(`💥 Throwing grenade with charge level: ${this.grenadeChargeLevel}`);
+    
+    // Send grenade throw event
+    this.scene.events.emit('grenade:throw', {
+      position: this.playerPosition,
+      direction: this.playerRotation, // Use stored rotation
+      chargeLevel: this.grenadeChargeLevel,
+      timestamp: Date.now()
+    });
+    
+    this.grenadeChargeStart = 0;
+    this.grenadeChargeLevel = 0;
+    this.scene.events.emit('grenade:charge:update', 0);
+  }
+
+  private getAimDirection(): number {
+    const mouseX = this.inputState.mouse.x;
+    const mouseY = this.inputState.mouse.y;
+    const playerX = this.playerPosition.x;
+    const playerY = this.playerPosition.y;
+    
+    // Calculate angle from player to mouse
+    return Math.atan2(mouseY - playerY, mouseX - playerX);
+  }
+
+  private updatePlayerRotation(): void {
+    const dx = this.inputState.mouse.x - this.playerPosition.x;
+    const dy = this.inputState.mouse.y - this.playerPosition.y;
+    
+    // Prevent atan2(0,0) issues when mouse is very close to player
+    if (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01) {
+      this.playerRotation = Math.atan2(dy, dx);
+    }
+  }
+
+  // ===== PUBLIC WEAPON GETTERS =====
+  
+  getCurrentWeapon(): string | null {
+    return this.weaponSlots[this.currentWeapon];
+  }
+
+  getGrenadeChargeLevel(): number {
+    return this.grenadeChargeLevel;
+  }
+
+  isAimingDownSights(): boolean {
+    return this.isADS;
   }
 } 
