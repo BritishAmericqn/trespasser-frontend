@@ -1,8 +1,12 @@
-# Vision System Migration to Binary Format
+# Vision System Migration to Binary Format - COMPLETED ✅
 
 ## Overview
 
 The backend has migrated from string-based vision data to numeric indices for improved performance. This reduces bandwidth by 67% and eliminates string allocation overhead.
+
+## Latest Update (8x8 Tiles)
+
+**UPDATE**: The tile size has been changed from 16×16 to 8×8 pixels for better vision granularity.
 
 ## What Changed
 
@@ -24,23 +28,23 @@ gameState.vision.visibleTiles = [255, 256, 286, ...]  // Numbers
 
 ## Implementation Details
 
-### Constants
-- **Tile Size**: 16×16 pixels
-- **Grid Dimensions**: 30×17 tiles (480÷16 × 270÷16)
-- **Max Index**: 509 (30×17-1)
+### Constants (Updated)
+- **Tile Size**: 8×8 pixels (changed from 16×16)
+- **Grid Dimensions**: 60×34 tiles (480÷8 × 272÷8)
+- **Max Index**: 2039 (60×34-1)
 
 ### Conversion Formulas
 ```typescript
 // Index to tile coordinates
-tileX = index % 30
-tileY = Math.floor(index / 30)
+tileX = index % 60
+tileY = Math.floor(index / 60)
 
 // Index to pixel coordinates
-pixelX = (index % 30) * 16
-pixelY = Math.floor(index / 30) * 16
+pixelX = (index % 60) * 8
+pixelY = Math.floor(index / 60) * 8
 
 // Tile coordinates to index
-index = tileY * 30 + tileX
+index = tileY * 60 + tileX
 ```
 
 ## Files Updated
@@ -75,8 +79,9 @@ index = tileY * 30 + tileX
 To verify the migration:
 1. Check that fog of war renders correctly
 2. Verify vision updates when moving
-3. Confirm tile boundaries align with 16×16 pixel grid
+3. Confirm tile boundaries align with 8×8 pixel grid
 4. Monitor network traffic for reduced bandwidth
+5. Verify indices are in range [0, 2039]
 
 ## Notes
 

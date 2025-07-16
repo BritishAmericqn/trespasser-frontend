@@ -56,7 +56,7 @@ export class VisionRenderer {
       
       // Draw fog for this non-visible tile
       const pixelPos = indexToPixel(tileIndex);
-      graphics.fillRect(pixelPos.x, pixelPos.y, 16, 16);
+      graphics.fillRect(pixelPos.x, pixelPos.y, VISION_CONSTANTS.TILE_SIZE, VISION_CONSTANTS.TILE_SIZE);
     }
     
     // Draw the graphics to the render texture

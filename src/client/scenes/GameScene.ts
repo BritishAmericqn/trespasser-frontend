@@ -695,15 +695,15 @@ export class GameScene extends Phaser.Scene {
       console.log('🧪 Testing vision with sample tiles...');
       // Create a test pattern of visible tiles around center
       const testTiles: number[] = [];
-      const centerX = 15; // Center of 30-wide grid
-      const centerY = 8;  // Center of 17-high grid
+      const centerX = 30; // Center of 60-wide grid
+      const centerY = 17; // Center of 34-high grid
       
-      // Create a 5x5 square of visible tiles
-      for (let dy = -2; dy <= 2; dy++) {
-        for (let dx = -2; dx <= 2; dx++) {
+      // Create a 7x7 square of visible tiles (larger to be visible with smaller tiles)
+      for (let dy = -3; dy <= 3; dy++) {
+        for (let dx = -3; dx <= 3; dx++) {
           const tileX = centerX + dx;
           const tileY = centerY + dy;
-          const tileIndex = tileY * 30 + tileX;
+          const tileIndex = tileY * 60 + tileX;  // Updated formula for 60-wide grid
           testTiles.push(tileIndex);
         }
       }

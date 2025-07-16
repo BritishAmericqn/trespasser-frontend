@@ -57,6 +57,7 @@ export function isTileVisible(tileX: number, tileY: number, visibleTiles: number
 
 /**
  * Group adjacent tile indices into rectangles for efficient rendering
+ * Updated for 8x8 tiles and 60x34 grid
  */
 export function groupTilesIntoRectangles(tileIndices: number[]): Array<{ x: number; y: number; width: number; height: number }> {
   if (tileIndices.length === 0) return [];
@@ -111,7 +112,7 @@ export function groupTilesIntoRectangles(tileIndices: number[]): Array<{ x: numb
           }
         }
         
-        // Convert to pixel coordinates
+        // Convert to pixel coordinates using 8x8 tile size
         rectangles.push({
           x: x * VISION_CONSTANTS.TILE_SIZE,
           y: y * VISION_CONSTANTS.TILE_SIZE,

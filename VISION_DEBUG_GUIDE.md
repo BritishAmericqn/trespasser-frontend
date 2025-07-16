@@ -27,9 +27,9 @@ The backend is sending `visibleTiles` as an array of numbers (tile indices), but
      - Sample pixel positions
 
 3. **Backend Data Format**
-   - Expected: Array of tile indices (0-509)
-   - Each index = `y * 30 + x` where grid is 30x17 tiles
-   - Tiles are 16x16 pixels each
+   - Expected: Array of tile indices (0-2039)
+   - Each index = `y * 60 + x` where grid is 60x34 tiles
+   - Tiles are 8x8 pixels each (updated from 16x16)
 
 ## Possible Issues
 
@@ -43,12 +43,12 @@ The backend is sending `visibleTiles` as an array of numbers (tile indices), but
 scene = game.scene.scenes[0]
 console.log('Visible tiles:', scene.visionRenderer.lastVisibleTiles)
 
-// Force test vision
-scene.visionRenderer.updateVisionFromBackend([225, 226, 227, 255, 256, 257])
+// Force test vision (center tiles in 60x34 grid)
+scene.visionRenderer.updateVisionFromBackend([1020, 1021, 1022, 1080, 1081, 1082])
 ```
 
 ## Next Steps
 1. Press **T** to test hardcoded vision
 2. Check if you see a clear square in the center
 3. Look at console logs to see what tile indices the backend is actually sending
-4. Compare backend indices with expected values (should be 0-509 range) 
+4. Compare backend indices with expected values (should be 0-2039 range) 

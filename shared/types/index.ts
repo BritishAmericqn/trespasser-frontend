@@ -65,8 +65,8 @@ export interface CollisionEvent {
 
 // Vision system constants
 export const VISION_CONSTANTS = {
-  TILE_SIZE: 16,        // Each tile is 16x16 pixels
-  GRID_WIDTH: 30,       // 480 / 16
-  GRID_HEIGHT: 17,      // 270 / 16 (rounded up)
-  MAX_TILE_INDEX: 509   // (30 * 17) - 1
+  TILE_SIZE: 8,         // Each tile is 8x8 pixels (updated from 16x16)
+  GRID_WIDTH: 60,       // 480 / 8
+  GRID_HEIGHT: 34,      // 272 / 8 (covers full height)
+  MAX_TILE_INDEX: 2039  // (60 * 34) - 1
 } as const; 
