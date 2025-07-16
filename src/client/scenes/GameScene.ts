@@ -423,9 +423,14 @@ export class GameScene extends Phaser.Scene {
       
       // Update visible players using filtered data
       if (gameState.visiblePlayers) {
-        // Debug log first visible player to check data format
-        if (gameState.visiblePlayers.length > 0 && Math.random() < 0.01) { // Log 1% of the time
-          console.log('Sample visible player data:', gameState.visiblePlayers[0]);
+        // One-time log when we first get visible players
+        if (gameState.visiblePlayers.length > 0 && !(this as any).loggedVisiblePlayers) {
+          (this as any).loggedVisiblePlayers = true;
+          console.log('🎮 First visible players data received:', {
+            count: gameState.visiblePlayers.length,
+            firstPlayer: gameState.visiblePlayers[0],
+            allPlayerIds: gameState.visiblePlayers.map(p => p.id || 'NO_ID')
+          });
         }
         
         // Convert array to object format for PlayerManager
@@ -436,6 +441,14 @@ export class GameScene extends Phaser.Scene {
         this.playerManager.updatePlayers(playersObj);
       } else if (gameState.players) {
         // Fallback to old format
+        if (!(this as any).warnedOldFormat) {
+          (this as any).warnedOldFormat = true;
+          console.log('⚠️ Using old players format (not visiblePlayers). First player:', 
+            gameState.players instanceof Map ? 
+              Array.from(gameState.players.values())[0] : 
+              Object.values(gameState.players)[0]
+          );
+        }
         this.playerManager.updatePlayers(gameState.players);
       }
       
