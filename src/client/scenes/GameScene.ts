@@ -387,11 +387,17 @@ export class GameScene extends Phaser.Scene {
         console.log('📥 Game state received:', {
           hasPlayers: !!gameState.players,
           hasVisiblePlayers: !!gameState.visiblePlayers,
+          visiblePlayersCount: gameState.visiblePlayers?.length || 0,
           hasVision: !!gameState.vision,
           visionTiles: gameState.vision?.visibleTiles?.length || 0,
           myId: myPlayerId,
           timestamp: gameState.timestamp
         });
+        
+        // Log first visible player structure if available
+        if (gameState.visiblePlayers && gameState.visiblePlayers.length > 0) {
+          console.log('First visible player structure:', JSON.stringify(gameState.visiblePlayers[0], null, 2));
+        }
       }
       
       // Update vision from backend data
@@ -417,6 +423,11 @@ export class GameScene extends Phaser.Scene {
       
       // Update visible players using filtered data
       if (gameState.visiblePlayers) {
+        // Debug log first visible player to check data format
+        if (gameState.visiblePlayers.length > 0 && Math.random() < 0.01) { // Log 1% of the time
+          console.log('Sample visible player data:', gameState.visiblePlayers[0]);
+        }
+        
         // Convert array to object format for PlayerManager
         const playersObj: { [key: string]: any } = {};
         gameState.visiblePlayers.forEach(player => {

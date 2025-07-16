@@ -52,6 +52,12 @@ export class PlayerManager {
       // Skip local player (handled separately)
       if (id === this.localPlayerId) continue;
       
+      // Validate player state
+      if (!state || !state.position || typeof state.position.x !== 'number' || typeof state.position.y !== 'number') {
+        console.warn(`Invalid player state for ${id}:`, state);
+        continue;
+      }
+      
       stillVisibleIds.add(id);
       
       if (this.visiblePlayers.has(id)) {
