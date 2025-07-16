@@ -59,6 +59,9 @@ export class GameScene extends Phaser.Scene {
     this.visionRenderer = new VisionRenderer(this);
     this.playerManager = new PlayerManager(this);
     
+    // Connect VisionRenderer to PlayerManager for partial visibility
+    this.playerManager.setVisionRenderer(this.visionRenderer);
+    
     // Create player sprite (simple colored square)
     this.player = this.add.rectangle(
       this.playerPosition.x,
@@ -801,6 +804,18 @@ export class GameScene extends Phaser.Scene {
     this.input.keyboard!.on('keydown-V', () => {
       this.visionRenderer.toggleDebug();
       console.log(`👁️ Vision debug toggled`);
+    });
+    
+    // Toggle partial visibility system (for testing)
+    this.input.keyboard!.on('keydown-Y', () => {
+      const enabled = !(this.playerManager as any).partialVisibilityEnabled;
+      (this.playerManager as any).partialVisibilityEnabled = enabled;
+      console.log(`🎭 Partial visibility ${enabled ? 'ENABLED' : 'DISABLED'}`);
+      
+      if (!enabled) {
+        // Clear all masks when disabling
+        (this.playerManager as any).clearAllMasks();
+      }
     });
     
     // Toggle boundary wall visibility (for debugging)

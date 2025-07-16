@@ -222,6 +222,11 @@ export class VisionRenderer {
     }
   }
   
+  // Get current vision polygon for masking other sprites
+  getCurrentPolygon(): Vector2[] | null {
+    return this.lastPolygon;
+  }
+  
   destroy(): void {
     this.fogLayer.destroy();
     if (this.visionDebugGraphics) {

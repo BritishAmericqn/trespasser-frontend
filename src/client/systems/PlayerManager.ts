@@ -1,4 +1,5 @@
 import { PlayerState, Vector2 } from '../../../shared/types/index';
+import { VisionRenderer } from './VisionRenderer';
 
 interface LastSeenData {
   position: Vector2;
@@ -10,11 +11,11 @@ interface LastSeenData {
 interface PlayerSprite {
   container: Phaser.GameObjects.Container;
   body: Phaser.GameObjects.Rectangle;
-  nameText: Phaser.GameObjects.Text;
-  healthBar: Phaser.GameObjects.Graphics;
   directionIndicator: Phaser.GameObjects.Graphics;
   team: 'red' | 'blue';
   lastUpdate: number;
+  maskGraphics?: Phaser.GameObjects.Graphics;
+  mask?: Phaser.Display.Masks.GeometryMask;
 }
 
 export class PlayerManager {
@@ -22,6 +23,8 @@ export class PlayerManager {
   private visiblePlayers: Map<string, PlayerSprite> = new Map();
   private lastSeenPositions: Map<string, LastSeenData> = new Map();
   private localPlayerId: string | null = null;
+  private visionRenderer: VisionRenderer | null = null;
+  private partialVisibilityEnabled: boolean = true; // Enable by default
   
   // Visual constants
   private readonly PLAYER_SIZE = 16;
@@ -36,6 +39,10 @@ export class PlayerManager {
   
   setLocalPlayerId(id: string): void {
     this.localPlayerId = id;
+  }
+  
+  setVisionRenderer(visionRenderer: VisionRenderer): void {
+    this.visionRenderer = visionRenderer;
   }
   
   updatePlayers(serverPlayers: Map<string, PlayerState> | { [key: string]: PlayerState }): void {
@@ -81,6 +88,9 @@ export class PlayerManager {
       }
     }
     
+    // Update visibility masks for all players
+    this.updateVisibilityMasks();
+    
     // Remove players no longer visible
     for (const [id, sprite] of this.visiblePlayers) {
       if (!stillVisibleIds.has(id)) {
@@ -115,6 +125,18 @@ export class PlayerManager {
   }
   
   private handlePlayerDisappear(id: string, sprite: PlayerSprite): void {
+    // Clean up mask before storing position
+    if (sprite.mask) {
+      sprite.container.clearMask();
+      sprite.mask.destroy();
+      sprite.mask = undefined;
+    }
+    
+    if (sprite.maskGraphics) {
+      sprite.maskGraphics.destroy();
+      sprite.maskGraphics = undefined;
+    }
+    
     // Store last seen position
     this.lastSeenPositions.set(id, {
       position: { 
@@ -154,15 +176,12 @@ export class PlayerManager {
       sprite.directionIndicator.setRotation(angle);
     }
     
-    // Update health bar
-    this.updateHealthBar(sprite.healthBar, state.health, 100);
-    
-    // Update color based on health
+    // Update color based on health for visual feedback (subtle)
     const healthPercent = state.health / 100;
     if (healthPercent < 0.3) {
-      sprite.body.setStrokeStyle(2, 0xff0000); // Red outline when low health
+      sprite.body.setAlpha(0.7); // Slightly faded when low health
     } else {
-      sprite.body.setStrokeStyle(1, 0x000000); // Normal outline
+      sprite.body.setAlpha(1); // Full opacity when healthy
     }
     
     sprite.lastUpdate = Date.now();
@@ -189,24 +208,9 @@ export class PlayerManager {
     directionIndicator.fillPath();
     container.add(directionIndicator);
     
-    // Player name (small text above)
-    const nameText = this.scene.add.text(0, -this.PLAYER_SIZE - 8, `P${state.id.slice(-4)}`, {
-      fontSize: '6px',
-      color: '#ffffff'
-    });
-    nameText.setOrigin(0.5, 0.5);
-    container.add(nameText);
-    
-    // Health bar
-    const healthBar = this.scene.add.graphics();
-    container.add(healthBar);
-    this.updateHealthBar(healthBar, state.health, 100);
-    
     return {
       container,
       body,
-      nameText,
-      healthBar,
       directionIndicator,
       team: state.team,
       lastUpdate: Date.now()
@@ -219,27 +223,16 @@ export class PlayerManager {
     
     const container = this.scene.add.container(lastSeen.position.x, lastSeen.position.y);
     container.setDepth(15); // Below actual players
-    container.setAlpha(0.5);
+    container.setAlpha(0.3);
     
-    // Ghost body (outline only)
-    const ghost = this.scene.add.rectangle(0, 0, this.PLAYER_SIZE, this.PLAYER_SIZE);
-    ghost.setStrokeStyle(1, 0x888888, 0.5);
+    // Ghost body (outline only) - subtle indicator
+    const ghost = this.scene.add.rectangle(0, 0, this.PLAYER_SIZE * 0.8, this.PLAYER_SIZE * 0.8);
+    ghost.setStrokeStyle(1, 0x666666, 0.3);
     container.add(ghost);
     
-    // Question mark
-    const questionMark = this.scene.add.text(0, 0, '?', {
-      fontSize: '10px',
-      color: '#888888'
-    });
-    questionMark.setOrigin(0.5, 0.5);
-    container.add(questionMark);
-    
-    // Footprint icon (optional, simple version)
-    const footprint = this.scene.add.graphics();
-    footprint.fillStyle(0x888888, 0.3);
-    footprint.fillCircle(-3, 8, 2);
-    footprint.fillCircle(3, 8, 2);
-    container.add(footprint);
+    // Simple dot in center - minimal visual hint
+    const dot = this.scene.add.circle(0, 0, 2, 0x666666, 0.4);
+    container.add(dot);
     
     lastSeen.sprite = container;
   }
@@ -270,28 +263,6 @@ export class PlayerManager {
     }
   }
   
-  private updateHealthBar(graphics: Phaser.GameObjects.Graphics, current: number, max: number): void {
-    graphics.clear();
-    
-    const barWidth = 20;
-    const barHeight = 3;
-    const barY = -this.PLAYER_SIZE - 4;
-    
-    // Background
-    graphics.fillStyle(0x333333, 0.8);
-    graphics.fillRect(-barWidth / 2, barY, barWidth, barHeight);
-    
-    // Health fill
-    const healthPercent = Math.max(0, Math.min(1, current / max));
-    const healthColor = healthPercent > 0.6 ? 0x00ff00 : healthPercent > 0.3 ? 0xffff00 : 0xff0000;
-    graphics.fillStyle(healthColor, 0.9);
-    graphics.fillRect(-barWidth / 2, barY, barWidth * healthPercent, barHeight);
-    
-    // Border
-    graphics.lineStyle(1, 0x000000, 0.5);
-    graphics.strokeRect(-barWidth / 2, barY, barWidth, barHeight);
-  }
-  
   // Get interpolated positions for smooth rendering
   getInterpolatedPositions(): Map<string, Vector2> {
     const positions = new Map<string, Vector2>();
@@ -306,9 +277,99 @@ export class PlayerManager {
     return positions;
   }
   
+  private updateVisibilityMasks(): void {
+    if (!this.visionRenderer || !this.partialVisibilityEnabled) return;
+    
+    const polygon = this.visionRenderer.getCurrentPolygon();
+    
+    // If no polygon, remove all masks
+    if (!polygon || polygon.length < 3) {
+      for (const [id, sprite] of this.visiblePlayers) {
+        if (sprite.mask) {
+          sprite.container.clearMask();
+          sprite.mask.destroy();
+          sprite.mask = undefined;
+          
+          if (sprite.maskGraphics) {
+            sprite.maskGraphics.destroy();
+            sprite.maskGraphics = undefined;
+          }
+        }
+      }
+      return;
+    }
+    
+    // Apply or update masks for all enemy players
+    for (const [id, sprite] of this.visiblePlayers) {
+      // Skip local player - they should always be fully visible
+      if (id === this.localPlayerId) {
+        if (sprite.mask) {
+          sprite.container.clearMask();
+          sprite.mask.destroy();
+          sprite.mask = undefined;
+          
+          if (sprite.maskGraphics) {
+            sprite.maskGraphics.destroy();
+            sprite.maskGraphics = undefined;
+          }
+        }
+        continue;
+      }
+      
+      // Create or update mask graphics
+      if (!sprite.maskGraphics) {
+        sprite.maskGraphics = this.scene.make.graphics({ x: 0, y: 0 }, false);
+      } else {
+        sprite.maskGraphics.clear();
+      }
+      
+      // Draw the visibility polygon
+      sprite.maskGraphics.fillStyle(0xffffff, 1);
+      sprite.maskGraphics.beginPath();
+      sprite.maskGraphics.moveTo(polygon[0].x, polygon[0].y);
+      
+      for (let i = 1; i < polygon.length; i++) {
+        sprite.maskGraphics.lineTo(polygon[i].x, polygon[i].y);
+      }
+      
+      sprite.maskGraphics.closePath();
+      sprite.maskGraphics.fillPath();
+      
+      // Create or update geometry mask
+      if (!sprite.mask) {
+        sprite.mask = sprite.maskGraphics.createGeometryMask();
+        sprite.container.setMask(sprite.mask);
+      }
+    }
+  }
+  
+  private clearAllMasks(): void {
+    for (const [id, sprite] of this.visiblePlayers) {
+      if (sprite.mask) {
+        sprite.container.clearMask();
+        sprite.mask.destroy();
+        sprite.mask = undefined;
+        
+        if (sprite.maskGraphics) {
+          sprite.maskGraphics.destroy();
+          sprite.maskGraphics = undefined;
+        }
+      }
+    }
+  }
+  
   destroy(): void {
-    // Clean up all sprites
+    // Clean up all sprites and their masks
     for (const [, sprite] of this.visiblePlayers) {
+      if (sprite.mask) {
+        sprite.container.clearMask();
+        sprite.mask.destroy();
+      }
+      
+      if (sprite.maskGraphics) {
+        sprite.maskGraphics.destroy();
+      }
+      
       sprite.container.destroy();
     }
     this.visiblePlayers.clear();
