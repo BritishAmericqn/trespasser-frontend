@@ -100,7 +100,7 @@ export class VisualEffectsSystem implements IGameSystem {
     });
 
     this.scene.events.on('backend:weapon:hit', (data: any) => {
-      console.log(`🎯 HIT: Player at (${data.position?.x},${data.position?.y})`);
+
       this.showHitMarker(data.position);
       
       // Update trail to actual hit position if we have the data
@@ -110,7 +110,7 @@ export class VisualEffectsSystem implements IGameSystem {
     });
 
     this.scene.events.on('backend:weapon:miss', (data: any) => {
-      console.log(`🔥 BACKEND EVENT RECEIVED: weapon:miss`, data);
+
       
       // Find the pending shot for this player
       let pendingShot: PendingShot | undefined;
@@ -146,7 +146,7 @@ export class VisualEffectsSystem implements IGameSystem {
 
     this.scene.events.on('backend:wall:damaged', (data: any) => {
       if (data.wallId && data.position) {
-        console.log(`🧱 WALL DAMAGED: ${data.wallId} at (${data.position.x},${data.position.y})`);
+  
       }
       this.showWallDamageEffect(data.position, data.material || 'concrete');
       this.showHitMarker(data.position);
@@ -165,7 +165,7 @@ export class VisualEffectsSystem implements IGameSystem {
 
     // Handle projectile creation and updates
     this.scene.events.on('backend:projectile:created', (data: any) => {
-      console.log(`🚀 PROJECTILE CREATED: ${data.type} at (${data.position.x},${data.position.y})`);
+
       this.createProjectile(data);
     });
 
@@ -216,7 +216,7 @@ export class VisualEffectsSystem implements IGameSystem {
       if (data.weaponType === 'grenade' || data.weaponType === 'rocket') {
         // For projectiles, don't show immediate trail - wait for backend projectile creation
         // Just show the launch effect
-        console.log(`🚀 ${data.weaponType} LAUNCHED from (${data.position.x},${data.position.y})`);
+  
         
       } else {
         // For hitscan weapons, show a temporary trail for immediate feedback
@@ -242,7 +242,7 @@ export class VisualEffectsSystem implements IGameSystem {
           }
         });
         
-        console.log(`🔫 ${data.weaponType} FIRED - showing temporary trail, waiting for backend confirmation`);
+        
       }
     });
   }
@@ -299,7 +299,7 @@ export class VisualEffectsSystem implements IGameSystem {
   showMuzzleFlash(position: { x: number; y: number }, direction: number): void {
     const flash = new PhaserMuzzleFlash(this.scene, position, direction);
     this.muzzleFlashes.push(flash);
-    console.log(`🔥 Muzzle flash created at (${position.x}, ${position.y})`);
+
   }
 
   showHitMarker(position: { x: number; y: number }): void {
@@ -317,7 +317,7 @@ export class VisualEffectsSystem implements IGameSystem {
     marker.strokePath();
     
     this.hitMarkers.push(marker);
-    console.log(`🎯 Hit marker created at (${position.x}, ${position.y})`);
+
   }
 
   showImpactEffect(position: { x: number; y: number }, direction: number): void {
@@ -335,7 +335,7 @@ export class VisualEffectsSystem implements IGameSystem {
       this.particles.push(spark);
     }
     
-    console.log(`💥 Impact effect created at (${position.x}, ${position.y})`);
+
   }
 
   showWallDamageEffect(position: { x: number; y: number }, material: string = 'concrete'): void {
@@ -356,7 +356,7 @@ export class VisualEffectsSystem implements IGameSystem {
       this.particles.push(debris);
     }
     
-    console.log(`🧱 Wall damage effect created at (${position.x}, ${position.y}) - ${material}`);
+    
   }
 
   showExplosionEffect(position: { x: number; y: number }, radius: number): void {
@@ -397,7 +397,7 @@ export class VisualEffectsSystem implements IGameSystem {
       }
     });
     
-    console.log(`💥 Explosion effect created at (${position.x}, ${position.y}) - radius: ${radius}`);
+
   }
 
   private getDebrisColors(material: string): number[] {
@@ -466,8 +466,7 @@ export class VisualEffectsSystem implements IGameSystem {
       for (const wall of wallsData) {
         if (this.isPointInWall(currentX, currentY, wall)) {
           // Hit a wall, log debug info
-          console.log(`🎯 CLIENT HIT DETECTION: Wall ${wall.id} hit at (${currentX.toFixed(1)}, ${currentY.toFixed(1)})`);
-          console.log(`   Wall bounds: x:${wall.position.x}-${wall.position.x + wall.width}, y:${wall.position.y}-${wall.position.y + wall.height}`);
+
           return { x: currentX, y: currentY };
         }
       }
@@ -484,13 +483,23 @@ export class VisualEffectsSystem implements IGameSystem {
       return false;
     }
     
-    // Check if the wall slice at this position is not destroyed
-    const sliceIndex = Math.floor((x - wall.position.x) / (wall.width / 5));
-    if (sliceIndex >= 0 && sliceIndex < 5) {
-      return wall.destructionMask[sliceIndex] === 0; // 0 means not destroyed
+    // Calculate which slice was hit based on wall orientation
+    let sliceIndex: number;
+    if (wall.orientation === 'horizontal' || wall.width > wall.height) {
+      // Horizontal wall: check vertical slice
+      const relativeX = x - wall.position.x;
+      sliceIndex = Math.floor((relativeX / wall.width) * 5);
+    } else {
+      // Vertical wall: check horizontal slice
+      const relativeY = y - wall.position.y;
+      sliceIndex = Math.floor((relativeY / wall.height) * 5);
     }
     
-    return false;
+    // Clamp slice index to valid range
+    sliceIndex = Math.min(4, Math.max(0, sliceIndex));
+    
+    // Check if the wall slice is not destroyed
+    return wall.destructionMask[sliceIndex] === 0; // 0 means not destroyed
   }
 
   private isTargetDifferentFromMouse(hitPoint: { x: number; y: number }, mousePos: { x: number; y: number }): boolean {
@@ -549,7 +558,7 @@ export class VisualEffectsSystem implements IGameSystem {
       startAlpha: 1.0
     });
     
-    console.log(`🚀 Bullet trail created from (${startPos.x}, ${startPos.y}) to (${endPos.x}, ${endPos.y}) - ${weaponType}`);
+
   }
 
   // Debug methods
@@ -586,7 +595,7 @@ export class VisualEffectsSystem implements IGameSystem {
 
     this.pendingShots.clear();
     
-    console.log('All visual effects cleared');
+
   }
 
   private createProjectile(data: any): void {
@@ -603,7 +612,7 @@ export class VisualEffectsSystem implements IGameSystem {
     projectile.trail.setDepth(40);
     this.projectiles.set(projectile.id, projectile);
     
-    console.log(`🚀 Projectile ${projectile.type} (${projectile.id}) created at (${projectile.position.x.toFixed(1)}, ${projectile.position.y.toFixed(1)})`);
+
   }
 
   private updateProjectilePosition(id: string, position: { x: number; y: number }): void {
@@ -698,7 +707,7 @@ export class VisualEffectsSystem implements IGameSystem {
       const explosionRadius = projectile.type === 'rocket' ? radius || 50 : radius || 40;
       this.showExplosionEffect(position, explosionRadius);
       
-      console.log(`💥 ${projectile.type} exploded at (${position.x.toFixed(1)}, ${position.y.toFixed(1)})`);
+      
     }
   }
 

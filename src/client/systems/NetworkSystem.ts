@@ -56,21 +56,7 @@ export class NetworkSystem implements IGameSystem {
 
     // Add debug listener for weapon/combat events only
     this.socket.onAny((eventName, data) => {
-      // Only log weapon/combat related events, not movement/game state
-      if (eventName.includes('weapon') || eventName.includes('wall') || eventName.includes('explosion') || eventName.includes('hit') || eventName.includes('projectile')) {
-        console.log(`🔥 BACKEND EVENT RECEIVED: ${eventName}`, data);
-        
-        // Special debug for wall events
-        if (eventName === 'wall:damaged') {
-          console.log('🧱 WALL DAMAGE EVENT DETAILS:', {
-            wallId: data.wallId,
-            position: data.position,
-            damage: data.damage,
-            newHealth: data.newHealth,
-            isDestroyed: data.isDestroyed
-          });
-        }
-      }
+
     });
 
     this.socket.on('connect', () => {
@@ -133,7 +119,7 @@ export class NetworkSystem implements IGameSystem {
     });
 
     this.socket.on('player:damaged', (data: any) => {
-      console.log('🔥 BACKEND EVENT RECEIVED: player:damaged', data);
+
       this.scene.events.emit('backend:player:damaged', data);
     });
 

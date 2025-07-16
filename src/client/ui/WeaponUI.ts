@@ -76,14 +76,7 @@ export class WeaponUI implements IGameSystem {
 
     // Listen for player damage
     this.scene.events.on('backend:player:damaged', (data: any) => {
-      // Log damage events to understand what backend is sending
-      console.log('💔 Player damage event received:', {
-        playerId: data.playerId,
-        targetId: data.targetId,
-        damageDealt: data.damageDealt,
-        newHealth: data.newHealth,
-        myId: (this.scene as any).networkSystem?.getSocket()?.id
-      });
+
       
       // Check if this damage is meant for us
       const myId = (this.scene as any).networkSystem?.getSocket()?.id;
@@ -93,7 +86,7 @@ export class WeaponUI implements IGameSystem {
       
       // If backend specifies a target and it's not us, ignore
       if (damageTargetId && myId && damageTargetId !== myId) {
-        console.log('⚠️ Ignoring damage event for other player:', damageTargetId);
+
         return;
       }
       
@@ -119,7 +112,7 @@ export class WeaponUI implements IGameSystem {
     // Listen for local ammo decrease (for immediate feedback)
     this.scene.events.on('weapon:ammo:decrease', (data: any) => {
       this.decreaseAmmo(data.weaponType, data.amount);
-      console.log(`📉 Ammo decreased for ${data.weaponType}: ${this.weapons[data.weaponType as keyof PlayerWeapons]?.currentAmmo || 0}`);
+      
     });
 
     // Listen for weapon switching (from InputSystem)

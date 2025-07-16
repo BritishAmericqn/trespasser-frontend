@@ -24,13 +24,6 @@ export class VisionRenderer {
     
     // Fill with black fog initially
     this.fogLayer.fill(0x000000, 0.9);
-    
-    console.log('🌫️ Fog layer created:', {
-      width: GAME_CONFIG.GAME_WIDTH,
-      height: GAME_CONFIG.GAME_HEIGHT,
-      depth: this.fogLayer.depth,
-      visible: this.fogLayer.visible
-    });
   }
   
   // Main update method that handles both polygon and tile-based vision
@@ -54,16 +47,7 @@ export class VisionRenderer {
     // Store polygon for debugging
     this.lastPolygon = visionData.polygon;
     
-    // Log first time we receive polygon data
-    if (!(this as any).loggedPolygonOnce) {
-      (this as any).loggedPolygonOnce = true;
-      console.log('🔺 Polygon vision active!', {
-        vertices: visionData.polygon.length,
-        viewAngle: visionData.viewAngle,
-        viewDirection: visionData.viewDirection,
-        viewDistance: visionData.viewDistance
-      });
-    }
+
     
     // Clear fog layer
     this.fogLayer.clear();
@@ -118,7 +102,7 @@ export class VisionRenderer {
     // Debug logging once
     if (visibleTiles.length > 0 && !(this as any).loggedVisionOnce) {
       (this as any).loggedVisionOnce = true;
-      console.log(`👁️ Tile vision active: ${visibleTiles.length} visible tiles`);
+
     }
     
     // Clear the fog layer completely

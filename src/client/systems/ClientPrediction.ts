@@ -110,7 +110,7 @@ export class ClientPrediction {
       );
       
       if (drift > 0.1) {
-        console.log(`📍 No pending inputs, syncing to server position (drift: ${drift.toFixed(1)}px)`);
+
       }
       
       this.predictedPosition = { ...serverPos };
@@ -142,7 +142,7 @@ export class ClientPrediction {
     );
     
     if (predictionError > 1) {
-      console.log(`⚠️ Prediction error: ${predictionError.toFixed(1)}px, correcting...`);
+
     }
     
     // Update predicted position

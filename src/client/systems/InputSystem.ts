@@ -354,7 +354,7 @@ export class InputSystem implements IGameSystem {
     });
     
     // Concise weapon fire logging
-    console.log(`🔫 FIRING ${weapon} from (${this.playerPosition.x},${this.playerPosition.y}) → (${targetPosition.x},${targetPosition.y}) angle: ${(this.playerRotation * 180 / Math.PI).toFixed(0)}°`);
+    
   }
 
   private handleADSToggle(): void {
@@ -470,7 +470,7 @@ export class InputSystem implements IGameSystem {
       sequence: this.sequence++
     });
     
-    console.log(`💣 THROWING GRENADE charge:${this.grenadeChargeLevel} from (${this.playerPosition.x},${this.playerPosition.y}) → (${targetPosition.x},${targetPosition.y})`);
+    
     
     // Reset charge state
     this.grenadeChargeStart = 0;

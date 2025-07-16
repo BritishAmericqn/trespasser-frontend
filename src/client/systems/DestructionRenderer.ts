@@ -115,8 +115,8 @@ export class DestructionRenderer implements IGameSystem {
     switch (material) {
       case 'concrete': return '#808080';
       case 'wood': return '#8B4513';
-      case 'metal': return '#C0C0C0';
-      case 'glass': return '#E6E6FA';
+      case 'metal': return '#404040';  // Updated to match backend
+      case 'glass': return '#87CEEB';  // Updated to match backend
       default: return '#808080';
     }
   }
@@ -198,7 +198,7 @@ export class DestructionRenderer implements IGameSystem {
     // Listen for wall damage events from backend
     this.scene.events.on('backend:wall:damaged', (data: any) => {
       if (data.wallId && data.sliceIndex !== undefined) {
-        console.log(`🧱 WALL DAMAGE: ${data.wallId} slice ${data.sliceIndex} - health: ${data.newHealth}${data.isDestroyed ? ' (DESTROYED)' : ''}`);
+  
       }
       
       if (this.walls.has(data.wallId)) {
@@ -218,7 +218,7 @@ export class DestructionRenderer implements IGameSystem {
     });
 
     this.scene.events.on('backend:wall:destroyed', (data: any) => {
-      console.log('💥 DESTRUCTION: Processing wall:destroyed event', data);
+
       this.destroyWallSlice(data.wallId, data.sliceIndex);
     });
 
@@ -238,6 +238,9 @@ export class DestructionRenderer implements IGameSystem {
   }
 
   private renderWall(ctx: CanvasRenderingContext2D, wall: Wall): void {
+    // Check if this is a 10x10 pillar (special case)
+    const isPillar = wall.width === 10 && wall.height === 10;
+    
     // Render each slice based on orientation
     for (let i = 0; i < 5; i++) {
       const sliceHealth = wall.sliceHealth[i];
@@ -245,14 +248,20 @@ export class DestructionRenderer implements IGameSystem {
       
       let sliceX: number, sliceY: number, sliceWidth: number, sliceHeight: number;
       
-      if (wall.orientation === 'horizontal') {
-        // Horizontal wall: vertical slices
+      if (isPillar) {
+        // Special case: 10x10 pillars have 2px tall horizontal slices
+        sliceWidth = wall.width;
+        sliceHeight = 2;
+        sliceX = wall.position.x;
+        sliceY = wall.position.y + (i * sliceHeight);
+      } else if (wall.orientation === 'horizontal') {
+        // Horizontal wall: vertical slices (divide width by 5)
         sliceWidth = wall.width / 5;
         sliceHeight = wall.height;
         sliceX = wall.position.x + (i * sliceWidth);
         sliceY = wall.position.y;
       } else {
-        // Vertical wall: horizontal slices
+        // Vertical wall: horizontal slices (divide height by 5)
         sliceWidth = wall.width;
         sliceHeight = wall.height / 5;
         sliceX = wall.position.x;
@@ -306,10 +315,7 @@ export class DestructionRenderer implements IGameSystem {
       ctx.restore();
     }
     
-    // Render wall border
-    ctx.strokeStyle = '#333333';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(wall.position.x, wall.position.y, wall.width, wall.height);
+    // Wall border removed - no longer needed for clean appearance
   }
 
   private renderSliceDamage(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, damageState: string): void {
@@ -344,12 +350,12 @@ export class DestructionRenderer implements IGameSystem {
     // If health reaches 0, mark as destroyed
     if (newHealth <= 0) {
       wall.destructionMask[sliceIndex] = 1;
-      console.log(`💥 Wall ${wallId} slice ${sliceIndex} destroyed (health: 0)`);
+      
     }
     
     wall.needsUpdate = true;
     
-    console.log(`🧱 Wall ${wallId} slice ${sliceIndex} damaged: ${newHealth} health`);
+
   }
 
   private destroyWallSlice(wallId: string, sliceIndex: number): void {
@@ -360,25 +366,39 @@ export class DestructionRenderer implements IGameSystem {
     wall.destructionMask[sliceIndex] = 1;
     wall.needsUpdate = true;
     
-    console.log(`💥 Wall ${wallId} slice ${sliceIndex} destroyed`);
+
   }
 
   private updateWallsFromGameState(wallsData: any): void {
-    // Log wall data once for debugging
-    if (!(this as any).loggedWallData) {
-      (this as any).loggedWallData = true;
-      console.log('📦 Backend walls received:', Object.keys(wallsData).length, 'walls');
-      
-      // Log details of each wall
-      Object.entries(wallsData).forEach(([id, data]: [string, any]) => {
-        const isBoundary = data.position.x < 0 || data.position.y < 0;
-        console.log(`  Wall ${id}: pos(${data.position.x},${data.position.y}) size(${data.width}x${data.height}) ${isBoundary ? '🚧 BOUNDARY' : '✅ GAME'} orientation:${data.orientation || 'auto'}`);
-      });
-    }
+    // Remove walls that no longer exist in game state
+    const currentWallIds = new Set(Object.keys(wallsData));
+    const wallsToRemove: string[] = [];
+    this.walls.forEach((wall, id) => {
+      if (!currentWallIds.has(id)) {
+        wallsToRemove.push(id);
+      }
+    });
+    wallsToRemove.forEach(id => this.walls.delete(id));
     
     // Update walls from game state
     for (const [wallId, wallData] of Object.entries(wallsData)) {
       const data = wallData as any;
+      
+      // Convert destructionMask from string to number array if needed
+      let destructionMask: number[];
+      if (typeof data.destructionMask === 'string') {
+        // Convert string like "11000" to [1, 1, 0, 0, 0]
+        destructionMask = data.destructionMask.split('').map((char: string) => parseInt(char, 10));
+        console.log(`🔧 Converted destructionMask for ${wallId} from string "${data.destructionMask}" to array [${destructionMask.join(', ')}]`);
+      } else if (Array.isArray(data.destructionMask)) {
+        // Ensure all values are numbers, not strings
+        destructionMask = data.destructionMask.map((val: any) => 
+          typeof val === 'string' ? parseInt(val, 10) : val
+        );
+      } else {
+        // Fallback to all intact
+        destructionMask = [0, 0, 0, 0, 0];
+      }
       
       if (!this.walls.has(wallId)) {
         // Create new wall
@@ -390,8 +410,8 @@ export class DestructionRenderer implements IGameSystem {
           orientation: data.orientation || (data.width > data.height ? 'horizontal' : 'vertical'),
           material: data.material,
           sliceHealth: [...data.sliceHealth],
-          destructionMask: [...data.destructionMask],
-          maxHealth: Math.max(...data.sliceHealth),
+          destructionMask: destructionMask,
+          maxHealth: data.maxHealth || Math.max(...data.sliceHealth),
           needsUpdate: true
         };
         
@@ -401,8 +421,13 @@ export class DestructionRenderer implements IGameSystem {
         // Update existing wall
         const wall = this.walls.get(wallId)!;
         wall.sliceHealth = [...data.sliceHealth];
-        wall.destructionMask = [...data.destructionMask];
+        wall.destructionMask = destructionMask;
         wall.orientation = data.orientation || (data.width > data.height ? 'horizontal' : 'vertical');
+        wall.width = data.width;
+        wall.height = data.height;
+        wall.position = data.position;
+        wall.material = data.material;
+        wall.maxHealth = data.maxHealth || wall.maxHealth;
         wall.needsUpdate = true;
       }
     }
@@ -411,6 +436,21 @@ export class DestructionRenderer implements IGameSystem {
   // Public methods
   
   addWall(wallData: any): void {
+    // Convert destructionMask from string to number array if needed
+    let destructionMask: number[];
+    if (typeof wallData.destructionMask === 'string') {
+      // Convert string like "11000" to [1, 1, 0, 0, 0]
+      destructionMask = wallData.destructionMask.split('').map((char: string) => parseInt(char, 10));
+    } else if (Array.isArray(wallData.destructionMask)) {
+      // Ensure all values are numbers, not strings
+      destructionMask = wallData.destructionMask.map((val: any) => 
+        typeof val === 'string' ? parseInt(val, 10) : val
+      );
+    } else {
+      // Fallback to all intact
+      destructionMask = [0, 0, 0, 0, 0];
+    }
+    
     const wall: Wall = {
       id: wallData.id,
       position: wallData.position,
@@ -419,25 +459,25 @@ export class DestructionRenderer implements IGameSystem {
       orientation: wallData.orientation || (wallData.width > wallData.height ? 'horizontal' : 'vertical'),
       material: wallData.material,
       sliceHealth: wallData.sliceHealth || [100, 100, 100, 100, 100],
-      destructionMask: wallData.destructionMask || [0, 0, 0, 0, 0],
+      destructionMask: destructionMask,
       maxHealth: 100,
       needsUpdate: true
     };
     
     this.walls.set(wallData.id, wall);
-    console.log(`🧱 Wall added: ${wallData.id}`);
+    
   }
 
   removeWall(wallId: string): void {
     if (this.walls.delete(wallId)) {
-      console.log(`🧱 Wall removed: ${wallId}`);
+
     }
   }
 
   clearAllWalls(): void {
     const count = this.walls.size;
     this.walls.clear();
-    console.log(`🧹 Cleared all ${count} walls from renderer`);
+
   }
 
   getWallCount(): number {
