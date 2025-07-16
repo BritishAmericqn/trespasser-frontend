@@ -1,4 +1,5 @@
 import { GAME_CONFIG } from '../../../shared/constants/index';
+import { VISION_CONSTANTS } from '../../../shared/types/index';
 import { indexToPixel, groupTilesIntoRectangles, pixelToIndex } from '../utils/visionHelpers';
 
 export class VisionRenderer {
@@ -40,21 +41,20 @@ export class VisionRenderer {
       console.log(`👁️ Vision system active: ${visibleTiles.length} visible tiles, fog layer visible: ${this.fogLayer.visible}`);
     }
     
-    // Simple approach: Clear fog and redraw
+    // Clear the fog layer completely
     this.fogLayer.clear();
     
-    // First fill everything with black fog
-    this.fogLayer.fill(0x000000, 0.85);
-    
-    // Then create a graphics object to punch holes
+    // Create a graphics object for drawing fog
     const graphics = this.scene.make.graphics({ x: 0, y: 0 }, false);
+    graphics.fillStyle(0x000000, 0.85);
     
-    // Set blend mode to ERASE to cut holes in the fog
-    graphics.setBlendMode(Phaser.BlendModes.ERASE);
-    graphics.fillStyle(0xffffff, 1);
-    
-    // Draw visible areas
-    for (const tileIndex of visibleTiles) {
+    // Draw fog for each tile that is NOT visible
+    const totalTiles = VISION_CONSTANTS.GRID_WIDTH * VISION_CONSTANTS.GRID_HEIGHT;
+    for (let tileIndex = 0; tileIndex < totalTiles; tileIndex++) {
+      // Skip if this tile is visible
+      if (visibleSet.has(tileIndex)) continue;
+      
+      // Draw fog for this non-visible tile
       const pixelPos = indexToPixel(tileIndex);
       graphics.fillRect(pixelPos.x, pixelPos.y, 16, 16);
     }
@@ -67,6 +67,18 @@ export class VisionRenderer {
     
     // Make sure fog layer is on top
     this.fogLayer.setDepth(100);
+    
+    // Debug: Log some info about what we're rendering
+    if (visibleTiles.length > 0 && !(this as any).debuggedVision) {
+      (this as any).debuggedVision = true;
+      console.log('🔍 Vision debug:', {
+        visibleTileCount: visibleTiles.length,
+        totalTiles: totalTiles,
+        foggedTiles: totalTiles - visibleTiles.length,
+        sampleVisibleIndices: visibleTiles.slice(0, 5),
+        sampleVisiblePositions: visibleTiles.slice(0, 5).map(i => indexToPixel(i))
+      });
+    }
   }
 
   

@@ -410,7 +410,9 @@ export class GameScene extends Phaser.Scene {
           console.log('✅ Vision system now using backend data!', {
             tileCount: gameState.vision.visibleTiles.length,
             position: gameState.vision.position,
-            viewAngle: gameState.vision.viewAngle
+            viewAngle: gameState.vision.viewAngle,
+            sampleTiles: gameState.vision.visibleTiles.slice(0, 10),
+            tileRange: `${Math.min(...gameState.vision.visibleTiles)} - ${Math.max(...gameState.vision.visibleTiles)}`
           });
         }
       } else if (!gameState.vision) {
@@ -686,6 +688,28 @@ export class GameScene extends Phaser.Scene {
         fogLayer.setVisible(!fogLayer.visible);
         console.log(`🌫️ Fog layer toggled - visible: ${fogLayer.visible}, depth: ${fogLayer.depth}`);
       }
+    });
+    
+    // Test vision with hardcoded tiles - Press T key
+    this.input.keyboard!.on('keydown-T', () => {
+      console.log('🧪 Testing vision with sample tiles...');
+      // Create a test pattern of visible tiles around center
+      const testTiles: number[] = [];
+      const centerX = 15; // Center of 30-wide grid
+      const centerY = 8;  // Center of 17-high grid
+      
+      // Create a 5x5 square of visible tiles
+      for (let dy = -2; dy <= 2; dy++) {
+        for (let dx = -2; dx <= 2; dx++) {
+          const tileX = centerX + dx;
+          const tileY = centerY + dy;
+          const tileIndex = tileY * 30 + tileX;
+          testTiles.push(tileIndex);
+        }
+      }
+      
+      console.log('Test tiles:', testTiles);
+      this.visionRenderer.updateVisionFromBackend(testTiles);
     });
 
     this.input.keyboard!.on('keydown-M', () => {
