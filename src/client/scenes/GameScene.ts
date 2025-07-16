@@ -382,23 +382,22 @@ export class GameScene extends Phaser.Scene {
         this.playerManager.setLocalPlayerId(myPlayerId);
       }
       
-      // Debug log game state periodically
-      if (Math.random() < 0.05) { // Log 5% of updates
+      // Debug log game state - only log periodically
+      if (Math.random() < 0.05) { // 5% of updates
         console.log('📥 Game state received:', {
           hasPlayers: !!gameState.players,
+          playersCount: gameState.players ? Object.keys(gameState.players).length : 0,
           hasVisiblePlayers: !!gameState.visiblePlayers,
           visiblePlayersCount: gameState.visiblePlayers?.length || 0,
           hasVision: !!gameState.vision,
           visionType: gameState.vision?.type || 'none',
-          visionData: gameState.vision?.type === 'polygon' 
-            ? `${gameState.vision.polygon.length} vertices`
-            : gameState.vision?.type === 'tiles'
-            ? `${gameState.vision.visibleTiles.length} tiles`
-            : 'unknown',
           myId: myPlayerId,
           timestamp: gameState.timestamp
         });
-        
+      }
+      
+      // Debug log game state periodically
+      if (Math.random() < 0.05) { // Log 5% of updates
         // Log first visible player structure if available
         if (gameState.visiblePlayers && gameState.visiblePlayers.length > 0) {
           console.log('First visible player structure:', JSON.stringify(gameState.visiblePlayers[0], null, 2));
@@ -442,9 +441,9 @@ export class GameScene extends Phaser.Scene {
       }
       
       // Update visible players using filtered data
-      if (gameState.visiblePlayers) {
+      if (gameState.visiblePlayers && gameState.visiblePlayers.length > 0) {
         // One-time log when we first get visible players
-        if (gameState.visiblePlayers.length > 0 && !(this as any).loggedVisiblePlayers) {
+        if (!(this as any).loggedVisiblePlayers) {
           (this as any).loggedVisiblePlayers = true;
           console.log('🎮 First visible players data received:', {
             count: gameState.visiblePlayers.length,
@@ -460,16 +459,45 @@ export class GameScene extends Phaser.Scene {
         });
         this.playerManager.updatePlayers(playersObj);
       } else if (gameState.players) {
-        // Fallback to old format
-        if (!(this as any).warnedOldFormat) {
-          (this as any).warnedOldFormat = true;
-          console.log('⚠️ Using old players format (not visiblePlayers). First player:', 
-            gameState.players instanceof Map ? 
-              Array.from(gameState.players.values())[0] : 
-              Object.values(gameState.players)[0]
-          );
+        // TEMPORARY WORKAROUND: Use all players until backend implements visibility filtering
+        // Convert players object/map to proper format
+        const allPlayers = gameState.players instanceof Map ? 
+          Object.fromEntries(gameState.players) : 
+          gameState.players;
+          
+        if (!(this as any).warnedWorkaround) {
+          (this as any).warnedWorkaround = true;
+          console.log('⚠️ Backend not sending visiblePlayers, using ALL players as workaround');
+          
+          // Log first player structure for debugging
+          const firstPlayerId = Object.keys(allPlayers)[0];
+          if (firstPlayerId) {
+            console.log('📊 First player data structure:', allPlayers[firstPlayerId]);
+          }
         }
-        this.playerManager.updatePlayers(gameState.players);
+        
+        // Fix player data format
+        const fixedPlayers: { [key: string]: any } = {};
+        for (const [id, player] of Object.entries(allPlayers)) {
+          const p = player as any;
+          
+          // Skip if no position data at all
+          if (!p.transform?.position && !p.position) {
+            console.warn(`Player ${id} has no position data, skipping`);
+            continue;
+          }
+          
+          // Fix position format
+          fixedPlayers[id] = {
+            ...p,
+            position: p.transform?.position || p.position || { x: 0, y: 0 },
+            velocity: p.velocity || { x: 0, y: 0 },
+            team: p.team || 'red',
+            health: p.health !== undefined ? p.health : 100
+          };
+        }
+        
+        this.playerManager.updatePlayers(fixedPlayers);
       }
       
       // Apply server position to local player
@@ -508,6 +536,11 @@ export class GameScene extends Phaser.Scene {
             if (backendIndicator) {
               backendIndicator.setPosition(serverPos.x, serverPos.y);
             }
+          }
+          
+          // Update our health from game state (authoritative)
+          if ((serverPlayer as any).health !== undefined) {
+            this.weaponUI.updateHealth((serverPlayer as any).health);
           }
         }
       }

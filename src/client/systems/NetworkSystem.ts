@@ -133,6 +133,7 @@ export class NetworkSystem implements IGameSystem {
     });
 
     this.socket.on('player:damaged', (data: any) => {
+      console.log('🔥 BACKEND EVENT RECEIVED: player:damaged', data);
       this.scene.events.emit('backend:player:damaged', data);
     });
 

@@ -52,15 +52,19 @@ export class PlayerManager {
       // Skip local player (handled separately)
       if (id === this.localPlayerId) continue;
       
-      // Validate player state - check both position and transform properties
-      let position = state.position;
+      // Validate player state - be flexible about position format
+      let position = null;
       
-      // Backend might be sending transform instead of position
-      if (!position && state.transform) {
-        position = state.transform;
+      // Try multiple position formats
+      if (state.position && typeof state.position.x === 'number') {
+        position = state.position;
+      } else if ((state as any).transform?.position && typeof (state as any).transform.position.x === 'number') {
+        position = (state as any).transform.position;
+      } else if ((state as any).x !== undefined && (state as any).y !== undefined) {
+        position = { x: (state as any).x, y: (state as any).y };
       }
       
-      if (!state || !position || typeof position.x !== 'number' || typeof position.y !== 'number') {
+      if (!position || typeof position.x !== 'number' || typeof position.y !== 'number') {
         console.warn(`Invalid player state for ${id}:`, state);
         continue;
       }

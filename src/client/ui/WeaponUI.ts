@@ -76,6 +76,32 @@ export class WeaponUI implements IGameSystem {
 
     // Listen for player damage
     this.scene.events.on('backend:player:damaged', (data: any) => {
+      // Log damage events to understand what backend is sending
+      console.log('💔 Player damage event received:', {
+        playerId: data.playerId,
+        targetId: data.targetId,
+        damageDealt: data.damageDealt,
+        newHealth: data.newHealth,
+        myId: (this.scene as any).networkSystem?.getSocket()?.id
+      });
+      
+      // Check if this damage is meant for us
+      const myId = (this.scene as any).networkSystem?.getSocket()?.id;
+      
+      // Try different possible player ID fields from backend
+      const damageTargetId = data.playerId || data.targetPlayerId || data.targetId || data.id;
+      
+      // If backend specifies a target and it's not us, ignore
+      if (damageTargetId && myId && damageTargetId !== myId) {
+        console.log('⚠️ Ignoring damage event for other player:', damageTargetId);
+        return;
+      }
+      
+      // If no target specified, this might be a broadcast bug - only apply if health decreased
+      if (!damageTargetId && this.health > data.newHealth) {
+        console.warn('⚠️ Damage event has no target ID - applying anyway as health decreased');
+      }
+      
       this.health = data.newHealth;
       this.lastDamageTime = Date.now();
     });
