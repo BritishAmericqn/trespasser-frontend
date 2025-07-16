@@ -218,6 +218,11 @@ export class ClientPrediction {
       // No correction needed, render at predicted position
       this.renderPosition = { ...this.predictedPosition };
     }
+    
+    // Always update the visual position
+    if (this.onPositionUpdate) {
+      this.onPositionUpdate(this.renderPosition);
+    }
   }
   
   // Get current positions for debugging

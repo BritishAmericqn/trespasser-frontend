@@ -198,6 +198,9 @@ export class InputSystem implements IGameSystem {
     this.inputState.mouse.leftReleased = false;
     this.inputState.mouse.rightReleased = false;
 
+    // Always update sequence for local prediction
+    this.inputState.sequence = this.sequence++;
+
     // Send input to server at 60Hz
     this.networkTimer += deltaTime;
     if (this.networkTimer >= this.NETWORK_RATE) {
@@ -217,9 +220,6 @@ export class InputSystem implements IGameSystem {
   }
 
   private sendInputToServer(): void {
-    // Update sequence number
-    this.inputState.sequence = this.sequence++;
-
     // Include position every 30 frames (0.5 seconds) for sync
     if (this.sequence % 30 === 0) {
       this.inputState.position = { ...this.playerPosition };
@@ -229,7 +229,7 @@ export class InputSystem implements IGameSystem {
       delete this.inputState.position;
     }
 
-    // Emit to NetworkSystem
+    // Emit to NetworkSystem - send raw input state, backend calculates movement
     this.scene.events.emit(EVENTS.PLAYER_INPUT, this.inputState);
   }
 

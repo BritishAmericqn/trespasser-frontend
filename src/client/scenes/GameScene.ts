@@ -4,7 +4,10 @@ import { VisualEffectsSystem } from '../systems/VisualEffectsSystem';
 import { DestructionRenderer } from '../systems/DestructionRenderer';
 import { WeaponUI } from '../ui/WeaponUI';
 import { ClientPrediction } from '../systems/ClientPrediction';
+import { VisionRenderer } from '../systems/VisionRenderer';
+import { PlayerManager } from '../systems/PlayerManager';
 import { GAME_CONFIG } from '../../../shared/constants/index';
+import { GameState, CollisionEvent } from '../../../shared/types/index';
 
 export class GameScene extends Phaser.Scene {
   private inputSystem!: InputSystem;
@@ -13,8 +16,11 @@ export class GameScene extends Phaser.Scene {
   private destructionRenderer!: DestructionRenderer;
   private weaponUI!: WeaponUI;
   private clientPrediction!: ClientPrediction;
+  private visionRenderer!: VisionRenderer;
+  private playerManager!: PlayerManager;
   private player!: Phaser.GameObjects.Rectangle;
   private playerPosition: { x: number; y: number };
+  private playerRotation: number = 0;
   private connectionStatus!: Phaser.GameObjects.Text;
   
   // Phaser UI elements
@@ -50,6 +56,8 @@ export class GameScene extends Phaser.Scene {
     this.destructionRenderer = new DestructionRenderer(this);
     this.weaponUI = new WeaponUI(this);
     this.clientPrediction = new ClientPrediction();
+    this.visionRenderer = new VisionRenderer(this);
+    this.playerManager = new PlayerManager(this);
     
     // Create player sprite (simple colored square)
     this.player = this.add.rectangle(
@@ -117,6 +125,17 @@ export class GameScene extends Phaser.Scene {
 
     // Update player position in InputSystem BEFORE processing input
     this.inputSystem.setPlayerPosition(this.playerPosition.x, this.playerPosition.y);
+
+    // Calculate player rotation from mouse position
+    const mouse = this.input.activePointer;
+    const worldPoint = this.cameras.main.getWorldPoint(mouse.x, mouse.y);
+    this.playerRotation = Math.atan2(
+      worldPoint.y - this.playerPosition.y,
+      worldPoint.x - this.playerPosition.x
+    );
+
+    // Vision is now updated from backend game state only
+    // No local vision calculation needed!
 
     // Update systems
     this.inputSystem.update(delta);
@@ -354,15 +373,70 @@ export class GameScene extends Phaser.Scene {
     });
 
     // Game state updates from server
-    this.events.on('network:gameState', (gameState: any) => {
+    this.events.on('network:gameState', (gameState: GameState) => {
       this.lastGameStateTime = Date.now();
       
-      // Apply server position to local player
-      if (gameState.players && this.networkSystem.getSocket()) {
-        const myPlayerId = this.networkSystem.getSocket()?.id;
-        if (!myPlayerId) return;
+      // Set local player ID for PlayerManager
+      const myPlayerId = this.networkSystem.getSocket()?.id;
+      if (myPlayerId) {
+        this.playerManager.setLocalPlayerId(myPlayerId);
+      }
+      
+      // Debug log game state periodically
+      if (Math.random() < 0.05) { // Log 5% of updates
+        console.log('📥 Game state received:', {
+          hasPlayers: !!gameState.players,
+          hasVisiblePlayers: !!gameState.visiblePlayers,
+          hasVision: !!gameState.vision,
+          visionTiles: gameState.vision?.visibleTiles?.length || 0,
+          myId: myPlayerId,
+          timestamp: gameState.timestamp
+        });
+      }
+      
+      // Update vision from backend data
+      if (gameState.vision && gameState.vision.visibleTiles) {
+        this.visionRenderer.updateVisionFromBackend(gameState.vision.visibleTiles);
         
-        const serverPlayer = gameState.players[myPlayerId];
+        // Log first time we receive vision data
+        if (!(this as any).receivedVisionData) {
+          (this as any).receivedVisionData = true;
+          console.log('✅ Vision system now using backend data!', {
+            tileCount: gameState.vision.visibleTiles.length,
+            position: gameState.vision.position,
+            viewAngle: gameState.vision.viewAngle
+          });
+        }
+      } else if (!gameState.vision) {
+        // Only warn once
+        if (!(this as any).warnedNoVision) {
+          (this as any).warnedNoVision = true;
+          console.warn('⚠️ No vision data from backend! Make sure backend is sending vision data.');
+        }
+      }
+      
+      // Update visible players using filtered data
+      if (gameState.visiblePlayers) {
+        // Convert array to object format for PlayerManager
+        const playersObj: { [key: string]: any } = {};
+        gameState.visiblePlayers.forEach(player => {
+          playersObj[player.id] = player;
+        });
+        this.playerManager.updatePlayers(playersObj);
+      } else if (gameState.players) {
+        // Fallback to old format
+        this.playerManager.updatePlayers(gameState.players);
+      }
+      
+      // Apply server position to local player
+      if (gameState.players && myPlayerId) {
+        const players = gameState.players instanceof Map 
+          ? gameState.players 
+          : gameState.players;
+        
+        const serverPlayer = players instanceof Map 
+          ? players.get(myPlayerId)
+          : players[myPlayerId];
         
         if (serverPlayer) {
           // Use client prediction to handle server updates
@@ -372,16 +446,16 @@ export class GameScene extends Phaser.Scene {
           let serverPos = null;
           
           // Format 1: serverPlayer.transform.position
-          if (serverPlayer.transform && serverPlayer.transform.position) {
-            serverPos = serverPlayer.transform.position;
+          if ((serverPlayer as any).transform && (serverPlayer as any).transform.position) {
+            serverPos = (serverPlayer as any).transform.position;
           }
           // Format 2: serverPlayer.position
           else if (serverPlayer.position) {
             serverPos = serverPlayer.position;
           }
           // Format 3: serverPlayer.x and serverPlayer.y
-          else if (typeof serverPlayer.x === 'number' && typeof serverPlayer.y === 'number') {
-            serverPos = { x: serverPlayer.x, y: serverPlayer.y };
+          else if (typeof (serverPlayer as any).x === 'number' && typeof (serverPlayer as any).y === 'number') {
+            serverPos = { x: (serverPlayer as any).x, y: (serverPlayer as any).y };
           }
           
           // Update backend indicator
@@ -392,6 +466,25 @@ export class GameScene extends Phaser.Scene {
             }
           }
         }
+      }
+    });
+    
+    // Listen for collision events
+    this.events.on('network:collision', (collision: CollisionEvent) => {
+      if (collision.playerId === this.networkSystem.getSocket()?.id) {
+        // Apply corrected position directly
+        this.playerPosition.x = collision.position.x;
+        this.playerPosition.y = collision.position.y;
+        this.player.setPosition(collision.position.x, collision.position.y);
+        
+        // Reset client prediction to new position
+        this.clientPrediction.reset(collision.position);
+        
+        // Visual feedback for collision
+        this.visualEffectsSystem.showImpactEffect(collision.position, 0);
+        
+        // Optional: Small screen shake
+        this.cameras.main.shake(50, 0.002);
       }
     });
 
@@ -464,9 +557,15 @@ export class GameScene extends Phaser.Scene {
     const movement = this.inputSystem.getMovementDirection();
     const speed = this.inputSystem.getMovementSpeed();
     
-    // Apply input through client prediction
+    // Apply input through client prediction for server sync
     if (inputState.sequence > 0) { // Only apply if we have a valid sequence
-      this.clientPrediction.applyInput(inputState, inputState.sequence);
+      // Add movement data to inputState for client prediction
+      const inputWithMovement = {
+        ...inputState,
+        movement,
+        movementSpeed: speed
+      };
+      this.clientPrediction.applyInput(inputWithMovement, inputState.sequence);
     }
     
     // Update render positions with smooth corrections
@@ -548,6 +647,12 @@ export class GameScene extends Phaser.Scene {
       } else {
         console.log('❌ Not connected to backend - start backend server first');
       }
+    });
+
+    // Toggle vision debug visualization
+    this.input.keyboard!.on('keydown-V', () => {
+      this.visionRenderer.toggleDebug();
+      console.log(`👁️ Vision debug toggled`);
     });
 
     this.input.keyboard!.on('keydown-M', () => {
@@ -713,6 +818,12 @@ export class GameScene extends Phaser.Scene {
     }
     if (this.weaponUI) {
       this.weaponUI.destroy();
+    }
+    if (this.visionRenderer) {
+      this.visionRenderer.destroy();
+    }
+    if (this.playerManager) {
+      this.playerManager.destroy();
     }
   }
 

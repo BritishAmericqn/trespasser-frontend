@@ -163,6 +163,15 @@ export class NetworkSystem implements IGameSystem {
     this.socket.on('explosion:created', (data: any) => {
       this.scene.events.emit('backend:explosion:created', data);
     });
+    
+    // Listen for collision events
+    this.socket.on('player:collision', (data: any) => {
+      this.scene.events.emit('network:collision', data);
+    });
+    
+    this.socket.on('collision:detected', (data: any) => {
+      this.scene.events.emit('network:collision', data);
+    });
   }
 
   private setupEventListeners(): void {
