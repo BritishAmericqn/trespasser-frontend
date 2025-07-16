@@ -678,6 +678,15 @@ export class GameScene extends Phaser.Scene {
       this.visionRenderer.toggleDebug();
       console.log(`👁️ Vision debug toggled`);
     });
+    
+    // Toggle fog visibility for debugging
+    this.input.keyboard!.on('keydown-F', () => {
+      const fogLayer = (this.visionRenderer as any).fogLayer;
+      if (fogLayer) {
+        fogLayer.setVisible(!fogLayer.visible);
+        console.log(`🌫️ Fog layer toggled - visible: ${fogLayer.visible}, depth: ${fogLayer.depth}`);
+      }
+    });
 
     this.input.keyboard!.on('keydown-M', () => {
       // Test miss effect at random position

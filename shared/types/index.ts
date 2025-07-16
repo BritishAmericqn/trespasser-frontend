@@ -7,6 +7,7 @@ export interface Vector2 {
 export interface PlayerState {
   id: string;
   position: Vector2;
+  transform?: Vector2;  // Backend might send this instead of position
   velocity: Vector2;
   health: number;
   team: 'red' | 'blue';

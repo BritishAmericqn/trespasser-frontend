@@ -17,6 +17,13 @@ export class VisionRenderer {
     
     // Fill with black fog initially
     this.fogLayer.fill(0x000000, 0.9);
+    
+    console.log('🌫️ Fog layer created:', {
+      width: GAME_CONFIG.GAME_WIDTH,
+      height: GAME_CONFIG.GAME_HEIGHT,
+      depth: this.fogLayer.depth,
+      visible: this.fogLayer.visible
+    });
   }
   
   // Update vision using backend's tile index data
@@ -24,42 +31,42 @@ export class VisionRenderer {
     // Convert to Set for fast lookups
     const visibleSet = new Set(visibleTiles);
     
-    // Clear the fog layer
+    // Store for debugging
+    this.lastVisibleTiles = visibleSet;
+    
+    // Debug logging once
+    if (visibleTiles.length > 0 && !(this as any).loggedVisionOnce) {
+      (this as any).loggedVisionOnce = true;
+      console.log(`👁️ Vision system active: ${visibleTiles.length} visible tiles, fog layer visible: ${this.fogLayer.visible}`);
+    }
+    
+    // Simple approach: Clear fog and redraw
     this.fogLayer.clear();
     
-    // Create temporary graphics for batch drawing
+    // First fill everything with black fog
+    this.fogLayer.fill(0x000000, 0.85);
+    
+    // Then create a graphics object to punch holes
     const graphics = this.scene.make.graphics({ x: 0, y: 0 }, false);
     
-    // Method 1: Draw fog everywhere except visible tiles (more accurate)
-    // Fill everything with dark fog
-    graphics.fillStyle(0x000000, 0.9);
-    graphics.fillRect(0, 0, GAME_CONFIG.GAME_WIDTH, GAME_CONFIG.GAME_HEIGHT);
-    
-    // Use erase blend mode to cut out visible areas
+    // Set blend mode to ERASE to cut holes in the fog
     graphics.setBlendMode(Phaser.BlendModes.ERASE);
     graphics.fillStyle(0xffffff, 1);
     
-    // Group adjacent tiles into rectangles for better performance
-    const rectangles = groupTilesIntoRectangles(visibleTiles);
-    
-    // Draw rectangles instead of individual tiles
-    for (const rect of rectangles) {
-      graphics.fillRect(rect.x, rect.y, rect.width, rect.height);
+    // Draw visible areas
+    for (const tileIndex of visibleTiles) {
+      const pixelPos = indexToPixel(tileIndex);
+      graphics.fillRect(pixelPos.x, pixelPos.y, 16, 16);
     }
     
-    // Apply the graphics to the fog layer
+    // Draw the graphics to the render texture
     this.fogLayer.draw(graphics);
     
     // Clean up
     graphics.destroy();
     
-    // Store for debugging
-    this.lastVisibleTiles = visibleSet;
-    
-    // Debug logging
-    if (Math.random() < 0.05) { // Log 5% of updates
-      console.log(`👁️ Vision update: ${visibleTiles.length} visible tiles`);
-    }
+    // Make sure fog layer is on top
+    this.fogLayer.setDepth(100);
   }
 
   

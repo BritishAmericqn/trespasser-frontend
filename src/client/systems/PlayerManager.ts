@@ -52,11 +52,21 @@ export class PlayerManager {
       // Skip local player (handled separately)
       if (id === this.localPlayerId) continue;
       
-      // Validate player state
-      if (!state || !state.position || typeof state.position.x !== 'number' || typeof state.position.y !== 'number') {
+      // Validate player state - check both position and transform properties
+      let position = state.position;
+      
+      // Backend might be sending transform instead of position
+      if (!position && state.transform) {
+        position = state.transform;
+      }
+      
+      if (!state || !position || typeof position.x !== 'number' || typeof position.y !== 'number') {
         console.warn(`Invalid player state for ${id}:`, state);
         continue;
       }
+      
+      // Update state to use the correct position
+      state.position = position;
       
       stillVisibleIds.add(id);
       
