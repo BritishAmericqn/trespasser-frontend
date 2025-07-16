@@ -192,6 +192,20 @@ export class GameScene extends Phaser.Scene {
     // Create wall graphics
     this.wallGraphics = this.add.graphics();
     this.wallGraphics.setDepth(5);
+    
+    // Create game bounds indicator (always visible)
+    const boundsGraphics = this.add.graphics();
+    boundsGraphics.setDepth(4);
+    boundsGraphics.lineStyle(1, 0x00ff00, 0.3);
+    boundsGraphics.strokeRect(0, 0, GAME_CONFIG.GAME_WIDTH, GAME_CONFIG.GAME_HEIGHT);
+    boundsGraphics.fillStyle(0x00ff00, 0.1);
+    
+    // Add corner markers
+    const cornerSize = 10;
+    boundsGraphics.fillRect(0, 0, cornerSize, cornerSize); // Top-left
+    boundsGraphics.fillRect(GAME_CONFIG.GAME_WIDTH - cornerSize, 0, cornerSize, cornerSize); // Top-right
+    boundsGraphics.fillRect(0, GAME_CONFIG.GAME_HEIGHT - cornerSize, cornerSize, cornerSize); // Bottom-left
+    boundsGraphics.fillRect(GAME_CONFIG.GAME_WIDTH - cornerSize, GAME_CONFIG.GAME_HEIGHT - cornerSize, cornerSize, cornerSize); // Bottom-right
   }
 
   private updatePhaserUI(): void {
@@ -279,21 +293,36 @@ export class GameScene extends Phaser.Scene {
   private updateWallsFromDestructionRenderer(): void {
     this.wallGraphics.clear();
     
-    // Get walls from DestructionRenderer and render them
-    const walls = this.destructionRenderer.getWallsData();
+    // Get walls from DestructionRenderer - only include boundary walls if debug mode is on
+    const showBoundaryWalls = (this as any).showBoundaryWalls || false;
+    const walls = this.destructionRenderer.getWallsData(showBoundaryWalls);
     
     walls.forEach(wall => {
-      const sliceWidth = wall.width / 5;
       
-      // Render each slice
+      // Render each slice based on orientation
       for (let i = 0; i < 5; i++) {
-        const sliceX = wall.position.x + (i * sliceWidth);
         const sliceHealth = wall.sliceHealth[i];
         const isDestroyed = wall.destructionMask[i] === 1;
         
         if (isDestroyed) {
           // Don't render destroyed slices
           continue;
+        }
+        
+        let sliceX: number, sliceY: number, sliceWidth: number, sliceHeight: number;
+        
+        if (wall.orientation === 'horizontal') {
+          // Horizontal wall: vertical slices
+          sliceWidth = wall.width / 5;
+          sliceHeight = wall.height;
+          sliceX = wall.position.x + (i * sliceWidth);
+          sliceY = wall.position.y;
+        } else {
+          // Vertical wall: horizontal slices
+          sliceWidth = wall.width;
+          sliceHeight = wall.height / 5;
+          sliceX = wall.position.x;
+          sliceY = wall.position.y + (i * sliceHeight);
         }
         
         // Determine damage state
@@ -310,7 +339,7 @@ export class GameScene extends Phaser.Scene {
         
         // Draw slice
         this.wallGraphics.fillStyle(baseColor, alpha);
-        this.wallGraphics.fillRect(sliceX, wall.position.y, sliceWidth, wall.height);
+        this.wallGraphics.fillRect(sliceX, sliceY, sliceWidth, sliceHeight);
         
         // Add damage cracks for visual feedback
         if (healthPercent < 0.75) {
@@ -318,7 +347,7 @@ export class GameScene extends Phaser.Scene {
           const numCracks = Math.floor((1 - healthPercent) * 3);
           for (let j = 0; j < numCracks; j++) {
             const x1 = sliceX + Math.random() * sliceWidth;
-            const y1 = wall.position.y + Math.random() * wall.height;
+            const y1 = sliceY + Math.random() * sliceHeight;
             const x2 = x1 + (Math.random() - 0.5) * 6;
             const y2 = y1 + (Math.random() - 0.5) * 6;
             this.wallGraphics.beginPath();
@@ -330,8 +359,29 @@ export class GameScene extends Phaser.Scene {
       }
       
       // Draw wall border
-      this.wallGraphics.lineStyle(1, 0x333333);
+      const isBoundaryWall = wall.position.x < 0 || wall.position.y < 0 || 
+                            wall.position.x >= GAME_CONFIG.GAME_WIDTH || 
+                            wall.position.y >= GAME_CONFIG.GAME_HEIGHT;
+      
+      if (isBoundaryWall) {
+        // Draw boundary walls with a distinctive red border
+        this.wallGraphics.lineStyle(2, 0xff0000, 0.8);
+      } else {
+        this.wallGraphics.lineStyle(1, 0x333333);
+      }
       this.wallGraphics.strokeRect(wall.position.x, wall.position.y, wall.width, wall.height);
+      
+      // Add visual indicator for boundary walls
+      if (isBoundaryWall) {
+        // Draw diagonal lines to indicate boundary wall
+        this.wallGraphics.lineStyle(1, 0xff0000, 0.3);
+        this.wallGraphics.beginPath();
+        this.wallGraphics.moveTo(wall.position.x, wall.position.y);
+        this.wallGraphics.lineTo(wall.position.x + wall.width, wall.position.y + wall.height);
+        this.wallGraphics.moveTo(wall.position.x + wall.width, wall.position.y);
+        this.wallGraphics.lineTo(wall.position.x, wall.position.y + wall.height);
+        this.wallGraphics.strokePath();
+      }
     });
   }
 
@@ -560,6 +610,27 @@ export class GameScene extends Phaser.Scene {
         // Visual feedback for collision
         this.visualEffectsSystem.showImpactEffect(collision.position, 0);
         
+        // Add collision indicator
+        const collisionMarker = this.add.graphics();
+        collisionMarker.lineStyle(2, 0xff00ff, 1);
+        collisionMarker.strokeCircle(collision.position.x, collision.position.y, 15);
+        collisionMarker.setDepth(200);
+        
+        // Add text to show what was hit
+        const collisionText = this.add.text(collision.position.x, collision.position.y - 20, 
+          `COLLISION!`, {
+          fontSize: '8px',
+          color: '#ff00ff'
+        }).setOrigin(0.5).setDepth(201);
+        
+        // Remove after 2 seconds
+        this.time.delayedCall(2000, () => {
+          collisionMarker.destroy();
+          collisionText.destroy();
+        });
+        
+        console.log('💥 Collision detected at:', collision.position);
+        
         // Optional: Small screen shake
         this.cameras.main.shake(50, 0.002);
       }
@@ -659,9 +730,9 @@ export class GameScene extends Phaser.Scene {
   }
 
   private createTestWalls(): void {
-    // Add test walls to the DestructionRenderer
-    this.destructionRenderer.addTestWalls();
-
+    // NOTE: Test walls are now disabled - backend should be the only source
+    console.log('🚫 Test walls disabled - waiting for backend walls');
+    // this.destructionRenderer.addTestWalls();
   }
 
   private createUI(): void {
@@ -732,6 +803,35 @@ export class GameScene extends Phaser.Scene {
       console.log(`👁️ Vision debug toggled`);
     });
     
+    // Toggle boundary wall visibility (for debugging)
+    this.input.keyboard!.on('keydown-O', () => {
+      const showBoundaryWalls = !(this as any).showBoundaryWalls;
+      (this as any).showBoundaryWalls = showBoundaryWalls;
+      console.log(`🚧 Boundary walls: ${showBoundaryWalls ? 'SHOWN' : 'HIDDEN'}`);
+      
+      if (showBoundaryWalls) {
+        // Log all walls to debug
+        const allWalls = this.destructionRenderer.getWallsData(true);
+        console.log(`📊 Total walls in renderer: ${allWalls.length}`);
+        allWalls.forEach(wall => {
+          const isBoundary = wall.position.x < 0 || wall.position.y < 0;
+          if (isBoundary) {
+            console.log(`  Boundary wall ${wall.id}: pos(${wall.position.x},${wall.position.y}) size(${wall.width}x${wall.height})`);
+          }
+        });
+        
+        // Adjust camera to show boundary walls
+        this.cameras.main.setZoom(0.8);
+        console.log('📷 Camera zoomed out to show boundary walls');
+      } else {
+        // Reset camera
+        this.cameras.main.setZoom(1);
+      }
+      
+      // Force re-render
+      this.updateWallsFromDestructionRenderer();
+    });
+    
     // Toggle fog visibility for debugging
     this.input.keyboard!.on('keydown-F', () => {
       const fogLayer = (this.visionRenderer as any).fogLayer;
@@ -761,6 +861,57 @@ export class GameScene extends Phaser.Scene {
       
       console.log('Test tiles:', testTiles);
       this.visionRenderer.updateVisionFromBackend(testTiles);
+    });
+    
+    // Test boundary walls manually - Press U key
+    this.input.keyboard!.on('keydown-U', () => {
+      console.log('🔧 Manual boundary wall test...');
+      
+      // Create temporary graphics to draw boundary walls
+      const testGraphics = this.add.graphics();
+      testGraphics.setDepth(200); // Very high depth
+      
+      // Manually draw where boundary walls should be
+      testGraphics.fillStyle(0xff0000, 0.5);
+      testGraphics.lineStyle(3, 0xffff00, 1);
+      
+      // Top boundary
+      testGraphics.fillRect(0, -10, 480, 10);
+      testGraphics.strokeRect(0, -10, 480, 10);
+      
+      // Bottom boundary
+      testGraphics.fillRect(0, 270, 480, 10);
+      testGraphics.strokeRect(0, 270, 480, 10);
+      
+      // Left boundary
+      testGraphics.fillRect(-10, 0, 10, 270);
+      testGraphics.strokeRect(-10, 0, 10, 270);
+      
+      // Right boundary
+      testGraphics.fillRect(480, 0, 10, 270);
+      testGraphics.strokeRect(480, 0, 10, 270);
+      
+      console.log('📍 Manual boundary walls drawn at expected positions');
+      
+      // Remove after 5 seconds
+      this.time.delayedCall(5000, () => {
+        testGraphics.destroy();
+        console.log('🧹 Manual boundary walls removed');
+      });
+    });
+    
+    // Clear and refresh walls - Press R key
+    this.input.keyboard!.on('keydown-R', () => {
+      console.log('🔄 Clearing and refreshing walls...');
+      
+      // Clear all walls from renderer
+      this.destructionRenderer.clearAllWalls();
+      
+      // Force a re-render
+      this.updateWallsFromDestructionRenderer();
+      
+      console.log('✅ Walls cleared - waiting for backend to send fresh wall data');
+      console.log('💡 If walls don\'t reappear, the backend might not be sending wall data in game state');
     });
     
     // Test polygon vision - Press P key
@@ -836,6 +987,33 @@ export class GameScene extends Phaser.Scene {
       console.log('💥 TEST: Explosion effect triggered');
     });
 
+    // Manual test wall - Press Q key
+    this.input.keyboard!.on('keydown-Q', () => {
+      console.log('🧱 Creating manual test wall...');
+      
+      // Create a test wall at mouse position
+      const mouse = this.input.activePointer;
+      const worldPoint = this.cameras.main.getWorldPoint(mouse.x, mouse.y);
+      
+      const testWall = {
+        id: `test_wall_${Date.now()}`,
+        position: { x: Math.floor(worldPoint.x), y: Math.floor(worldPoint.y) },
+        width: 60,
+        height: 15,
+        orientation: 'horizontal' as const,
+        material: 'concrete',
+        sliceHealth: [100, 100, 100, 100, 100],
+        destructionMask: [0, 0, 0, 0, 0],
+        maxHealth: 100
+      };
+      
+      this.destructionRenderer.addWall(testWall);
+      this.updateWallsFromDestructionRenderer();
+      
+      console.log(`✅ Test wall created at (${testWall.position.x}, ${testWall.position.y})`);
+      console.log('⚠️  This wall is CLIENT-SIDE ONLY - no collision!');
+    });
+
     this.input.keyboard!.on('keydown-P', () => {
       // Debug position information
       console.log('🎯 POSITION DEBUG SNAPSHOT:', {
@@ -875,7 +1053,7 @@ export class GameScene extends Phaser.Scene {
     this.input.keyboard!.on('keydown-D', () => {
       // Debug: Show wall boundaries
       console.log('🧱 WALL DEBUG - Client-side wall positions:');
-      const wallsData = this.destructionRenderer.getWallsData();
+      const wallsData = this.destructionRenderer.getWallsData(false);
       wallsData.forEach(wall => {
         console.log(`Wall ${wall.id}:`, {
           position: wall.position,
@@ -889,6 +1067,44 @@ export class GameScene extends Phaser.Scene {
           destroyed: wall.destructionMask
         });
       });
+    });
+
+    // Wall sync diagnostic - Press W key
+    this.input.keyboard!.on('keydown-W', () => {
+      console.log('🔍 WALL SYNC DIAGNOSTIC');
+      console.log('====================');
+      
+      // Get all walls from DestructionRenderer
+      const allWalls = this.destructionRenderer.getWallsData(true);
+      const gameWalls = this.destructionRenderer.getWallsData(false);
+      
+      console.log(`📊 Total walls in renderer: ${allWalls.length}`);
+      console.log(`🎮 Game walls (visible): ${gameWalls.length}`);
+      console.log(`🚧 Boundary walls: ${allWalls.length - gameWalls.length}`);
+      
+      // List all walls with their properties
+      console.log('\n📋 All walls in frontend:');
+      allWalls.forEach(wall => {
+        const isBoundary = wall.position.x < 0 || wall.position.y < 0;
+        const totalHealth = wall.sliceHealth.reduce((sum, h) => sum + h, 0);
+        const destroyedSlices = wall.destructionMask.filter(m => m === 1).length;
+        
+        console.log(`  ${wall.id}:`, {
+          position: `(${wall.position.x}, ${wall.position.y})`,
+          size: `${wall.width}x${wall.height}`,
+          orientation: wall.orientation,
+          type: isBoundary ? '🚧 BOUNDARY' : '✅ GAME',
+          material: wall.material,
+          health: `${totalHealth}/${wall.maxHealth * 5}`,
+          destroyed: destroyedSlices > 0 ? `${destroyedSlices}/5 slices` : 'intact'
+        });
+      });
+      
+      console.log('\n💡 DIAGNOSTIC TIPS:');
+      console.log('- If you have invisible walls with collision: Backend has walls that frontend doesn\'t');
+      console.log('- If you have visible walls without collision: Frontend has walls that backend doesn\'t');
+      console.log('- Check wall IDs match between frontend and backend');
+      console.log('- Press \'D\' for more detailed wall bounds');
     });
 
     // Create wall debug display - smaller and repositioned

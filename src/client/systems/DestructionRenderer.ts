@@ -5,6 +5,7 @@ interface Wall {
   position: { x: number; y: number };
   width: number;
   height: number;
+  orientation: 'horizontal' | 'vertical';
   material: string;
   sliceHealth: number[];
   destructionMask: number[];
@@ -56,10 +57,8 @@ export class DestructionRenderer implements IGameSystem {
   }
 
   render(ctx: CanvasRenderingContext2D): void {
-    // Render all walls
-    for (const wall of this.walls.values()) {
-      this.renderWall(ctx, wall);
-    }
+    // This method is not used anymore - walls are rendered in GameScene
+    // Keeping empty for compatibility
   }
 
   private setupRenderCanvas(): void {
@@ -239,26 +238,39 @@ export class DestructionRenderer implements IGameSystem {
   }
 
   private renderWall(ctx: CanvasRenderingContext2D, wall: Wall): void {
-    const sliceWidth = wall.width / 5;
-    
-    // Render each slice
+    // Render each slice based on orientation
     for (let i = 0; i < 5; i++) {
-      const sliceX = wall.position.x + (i * sliceWidth);
       const sliceHealth = wall.sliceHealth[i];
       const isDestroyed = wall.destructionMask[i] === 1;
+      
+      let sliceX: number, sliceY: number, sliceWidth: number, sliceHeight: number;
+      
+      if (wall.orientation === 'horizontal') {
+        // Horizontal wall: vertical slices
+        sliceWidth = wall.width / 5;
+        sliceHeight = wall.height;
+        sliceX = wall.position.x + (i * sliceWidth);
+        sliceY = wall.position.y;
+      } else {
+        // Vertical wall: horizontal slices
+        sliceWidth = wall.width;
+        sliceHeight = wall.height / 5;
+        sliceX = wall.position.x;
+        sliceY = wall.position.y + (i * sliceHeight);
+      }
       
       if (isDestroyed) {
         // Render destroyed slices as dark gaps
         ctx.save();
         ctx.fillStyle = '#111111';
         ctx.globalAlpha = 0.3;
-        ctx.fillRect(sliceX, wall.position.y, sliceWidth, wall.height);
+        ctx.fillRect(sliceX, sliceY, sliceWidth, sliceHeight);
         
         // Add destruction marker
         ctx.fillStyle = '#ff0000';
         ctx.globalAlpha = 0.5;
         ctx.font = '8px monospace';
-        ctx.fillText('X', sliceX + sliceWidth/2 - 3, wall.position.y + wall.height/2 + 3);
+        ctx.fillText('X', sliceX + sliceWidth/2 - 3, sliceY + sliceHeight/2 + 3);
         ctx.restore();
         continue;
       }
@@ -284,11 +296,11 @@ export class DestructionRenderer implements IGameSystem {
         ctx.globalAlpha = 0.6;
       }
       
-      ctx.fillRect(sliceX, wall.position.y, sliceWidth, wall.height);
+      ctx.fillRect(sliceX, sliceY, sliceWidth, sliceHeight);
       
       // Add damage overlay
       if (damageState !== 'intact') {
-        this.renderSliceDamage(ctx, sliceX, wall.position.y, sliceWidth, wall.height, damageState);
+        this.renderSliceDamage(ctx, sliceX, sliceY, sliceWidth, sliceHeight, damageState);
       }
       
       ctx.restore();
@@ -352,6 +364,18 @@ export class DestructionRenderer implements IGameSystem {
   }
 
   private updateWallsFromGameState(wallsData: any): void {
+    // Log wall data once for debugging
+    if (!(this as any).loggedWallData) {
+      (this as any).loggedWallData = true;
+      console.log('📦 Backend walls received:', Object.keys(wallsData).length, 'walls');
+      
+      // Log details of each wall
+      Object.entries(wallsData).forEach(([id, data]: [string, any]) => {
+        const isBoundary = data.position.x < 0 || data.position.y < 0;
+        console.log(`  Wall ${id}: pos(${data.position.x},${data.position.y}) size(${data.width}x${data.height}) ${isBoundary ? '🚧 BOUNDARY' : '✅ GAME'} orientation:${data.orientation || 'auto'}`);
+      });
+    }
+    
     // Update walls from game state
     for (const [wallId, wallData] of Object.entries(wallsData)) {
       const data = wallData as any;
@@ -363,6 +387,7 @@ export class DestructionRenderer implements IGameSystem {
           position: data.position,
           width: data.width,
           height: data.height,
+          orientation: data.orientation || (data.width > data.height ? 'horizontal' : 'vertical'),
           material: data.material,
           sliceHealth: [...data.sliceHealth],
           destructionMask: [...data.destructionMask],
@@ -377,6 +402,7 @@ export class DestructionRenderer implements IGameSystem {
         const wall = this.walls.get(wallId)!;
         wall.sliceHealth = [...data.sliceHealth];
         wall.destructionMask = [...data.destructionMask];
+        wall.orientation = data.orientation || (data.width > data.height ? 'horizontal' : 'vertical');
         wall.needsUpdate = true;
       }
     }
@@ -390,6 +416,7 @@ export class DestructionRenderer implements IGameSystem {
       position: wallData.position,
       width: wallData.width,
       height: wallData.height,
+      orientation: wallData.orientation || (wallData.width > wallData.height ? 'horizontal' : 'vertical'),
       material: wallData.material,
       sliceHealth: wallData.sliceHealth || [100, 100, 100, 100, 100],
       destructionMask: wallData.destructionMask || [0, 0, 0, 0, 0],
@@ -407,17 +434,43 @@ export class DestructionRenderer implements IGameSystem {
     }
   }
 
+  clearAllWalls(): void {
+    const count = this.walls.size;
+    this.walls.clear();
+    console.log(`🧹 Cleared all ${count} walls from renderer`);
+  }
+
   getWallCount(): number {
     return this.walls.size;
   }
 
-  getWallsData(): Wall[] {
-    return Array.from(this.walls.values());
+  getWallsData(includeBoundaryWalls: boolean = false): Wall[] {
+    if (includeBoundaryWalls) {
+      // Return all walls including boundary walls
+      return Array.from(this.walls.values());
+    }
+    
+    // Return only game walls (exclude boundary walls)
+    return Array.from(this.walls.values()).filter(wall => {
+      // Check if this is a boundary wall by ID or position
+      if (wall.id.includes('boundary')) {
+        return false; // Always exclude walls with 'boundary' in their ID
+      }
+      
+      // Also exclude walls that are at the exact edges
+      const isTopBoundary = wall.position.y <= -10 && wall.height <= 10;
+      const isBottomBoundary = wall.position.y >= 270 && wall.height <= 10;
+      const isLeftBoundary = wall.position.x <= -10 && wall.width <= 10;
+      const isRightBoundary = wall.position.x >= 480 && wall.width <= 10;
+      
+      return !(isTopBoundary || isBottomBoundary || isLeftBoundary || isRightBoundary);
+    });
   }
 
   addTestWalls(): void {
     // Add test walls for development (using backend wall IDs with underscores)
     const testWalls = [
+      // Horizontal walls
       {
         id: 'wall_1',
         position: { x: 200, y: 100 },
@@ -427,14 +480,6 @@ export class DestructionRenderer implements IGameSystem {
         maxHealth: 150
       },
       {
-        id: 'wall_2',
-        position: { x: 100, y: 200 },
-        width: 60,
-        height: 15,
-        material: 'wood',
-        maxHealth: 80
-      },
-      {
         id: 'wall_3',
         position: { x: 300, y: 150 },
         width: 60,
@@ -442,19 +487,37 @@ export class DestructionRenderer implements IGameSystem {
         material: 'metal',
         maxHealth: 200
       },
+      // Vertical walls
+      {
+        id: 'wall_2',
+        position: { x: 100, y: 140 },
+        width: 15,
+        height: 60,
+        material: 'wood',
+        maxHealth: 80
+      },
       {
         id: 'wall_4',
-        position: { x: 150, y: 50 },
-        width: 60,
-        height: 15,
+        position: { x: 400, y: 50 },
+        width: 15,
+        height: 60,
         material: 'glass',
         maxHealth: 30
+      },
+      {
+        id: 'wall_5',
+        position: { x: 250, y: 180 },
+        width: 15,
+        height: 60,
+        material: 'concrete',
+        maxHealth: 150
       }
     ];
 
     testWalls.forEach(wallData => {
       const wall: Wall = {
         ...wallData,
+        orientation: wallData.width > wallData.height ? 'horizontal' : 'vertical',
         sliceHealth: [wallData.maxHealth, wallData.maxHealth, wallData.maxHealth, wallData.maxHealth, wallData.maxHealth],
         destructionMask: [0, 0, 0, 0, 0],
         needsUpdate: true

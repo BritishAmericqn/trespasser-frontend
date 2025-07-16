@@ -441,7 +441,7 @@ export class VisualEffectsSystem implements IGameSystem {
     
     // Get wall data from DestructionRenderer (via scene)
     const scene = this.scene as any;
-    const wallsData = scene.destructionRenderer?.getWallsData() || [];
+    const wallsData = scene.destructionRenderer?.getWallsData(false) || [];
     
     // Calculate ray direction
     const dx = targetPos.x - startPos.x;
