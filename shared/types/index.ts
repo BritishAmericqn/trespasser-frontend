@@ -50,11 +50,25 @@ export interface GameState {
   timestamp: number;
   tickRate: number;
   visionMask?: number[];
-  vision?: {
-    visibleTiles: number[];   // Array of tile indices (0-509)
-    viewAngle: number;        // Player's looking angle in radians
-    position: Vector2;        // Player position
-  };
+  vision?: TileVision | PolygonVision;
+}
+
+// Tile-based vision (legacy)
+export interface TileVision {
+  type: 'tiles';
+  visibleTiles: number[];   // Array of tile indices
+  viewAngle: number;        // Player's looking angle in radians
+  position: Vector2;        // Player position
+}
+
+// Polygon-based vision (new)
+export interface PolygonVision {
+  type: 'polygon';
+  polygon: Vector2[];       // Array of vertices forming visibility polygon
+  viewAngle: number;        // FOV angle in radians (e.g., 2.094 for 120°)
+  viewDirection: number;    // Player's facing direction in radians
+  viewDistance: number;     // Maximum view distance in pixels
+  position: Vector2;        // Player position
 }
 
 export interface CollisionEvent {

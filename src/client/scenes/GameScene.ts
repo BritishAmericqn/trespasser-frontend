@@ -7,7 +7,7 @@ import { ClientPrediction } from '../systems/ClientPrediction';
 import { VisionRenderer } from '../systems/VisionRenderer';
 import { PlayerManager } from '../systems/PlayerManager';
 import { GAME_CONFIG } from '../../../shared/constants/index';
-import { GameState, CollisionEvent } from '../../../shared/types/index';
+import { GameState, CollisionEvent, Vector2, PolygonVision } from '../../../shared/types/index';
 
 export class GameScene extends Phaser.Scene {
   private inputSystem!: InputSystem;
@@ -389,7 +389,12 @@ export class GameScene extends Phaser.Scene {
           hasVisiblePlayers: !!gameState.visiblePlayers,
           visiblePlayersCount: gameState.visiblePlayers?.length || 0,
           hasVision: !!gameState.vision,
-          visionTiles: gameState.vision?.visibleTiles?.length || 0,
+          visionType: gameState.vision?.type || 'none',
+          visionData: gameState.vision?.type === 'polygon' 
+            ? `${gameState.vision.polygon.length} vertices`
+            : gameState.vision?.type === 'tiles'
+            ? `${gameState.vision.visibleTiles.length} tiles`
+            : 'unknown',
           myId: myPlayerId,
           timestamp: gameState.timestamp
         });
@@ -401,19 +406,32 @@ export class GameScene extends Phaser.Scene {
       }
       
       // Update vision from backend data
-      if (gameState.vision && gameState.vision.visibleTiles) {
-        this.visionRenderer.updateVisionFromBackend(gameState.vision.visibleTiles);
+      if (gameState.vision) {
+        this.visionRenderer.updateVisionFromBackend(gameState.vision);
         
         // Log first time we receive vision data
         if (!(this as any).receivedVisionData) {
           (this as any).receivedVisionData = true;
-          console.log('✅ Vision system now using backend data!', {
-            tileCount: gameState.vision.visibleTiles.length,
-            position: gameState.vision.position,
-            viewAngle: gameState.vision.viewAngle,
-            sampleTiles: gameState.vision.visibleTiles.slice(0, 10),
-            tileRange: `${Math.min(...gameState.vision.visibleTiles)} - ${Math.max(...gameState.vision.visibleTiles)}`
-          });
+          
+          if (gameState.vision.type === 'polygon') {
+            console.log('✅ Polygon vision system active!', {
+              type: 'polygon',
+              vertices: gameState.vision.polygon.length,
+              viewAngle: gameState.vision.viewAngle,
+              viewDirection: gameState.vision.viewDirection,
+              position: gameState.vision.position
+            });
+          } else if (gameState.vision.type === 'tiles' || (gameState.vision as any).visibleTiles) {
+            const tiles = gameState.vision.type === 'tiles' 
+              ? gameState.vision.visibleTiles 
+              : (gameState.vision as any).visibleTiles;
+            console.log('✅ Tile vision system active!', {
+              type: 'tiles',
+              tileCount: tiles.length,
+              position: gameState.vision.position,
+              viewAngle: gameState.vision.viewAngle
+            });
+          }
         }
       } else if (!gameState.vision) {
         // Only warn once
@@ -710,6 +728,43 @@ export class GameScene extends Phaser.Scene {
       
       console.log('Test tiles:', testTiles);
       this.visionRenderer.updateVisionFromBackend(testTiles);
+    });
+    
+    // Test polygon vision - Press P key
+    this.input.keyboard!.on('keydown-P', () => {
+      console.log('🔺 Testing polygon vision...');
+      
+      // Create a test polygon (120° cone facing right)
+      const center = { x: 240, y: 135 };
+      const distance = 120;
+      const angle = 0; // Facing right
+      const fov = 2.094; // 120 degrees in radians
+      
+      // Generate polygon vertices for a vision cone
+      const vertices: Vector2[] = [];
+      vertices.push(center); // Start at player position
+      
+      // Add arc vertices
+      const segments = 12;
+      for (let i = 0; i <= segments; i++) {
+        const a = angle - fov/2 + (fov * i / segments);
+        vertices.push({
+          x: center.x + Math.cos(a) * distance,
+          y: center.y + Math.sin(a) * distance
+        });
+      }
+      
+      const testPolygon: PolygonVision = {
+        type: 'polygon',
+        polygon: vertices,
+        viewAngle: fov,
+        viewDirection: angle,
+        viewDistance: distance,
+        position: center
+      };
+      
+      console.log('Test polygon:', { vertices: vertices.length, center, distance });
+      this.visionRenderer.updateVisionFromBackend(testPolygon);
     });
 
     this.input.keyboard!.on('keydown-M', () => {
