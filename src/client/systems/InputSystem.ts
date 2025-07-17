@@ -51,6 +51,24 @@ export class InputSystem implements IGameSystem {
   private pendingWeaponFire: boolean = false;
   private pendingADSToggle: boolean = false;
   private isChargingGrenade: boolean = false; // Track if we're charging via left-click
+  private weaponUI: any = null; // Reference to WeaponUI for ammo checking
+  
+  // Full-auto firing system
+  private weaponRPM: { [key: string]: number } = {
+    rifle: 600,   // 600 rounds per minute (10 rounds per second)
+    pistol: 200,  // 200 rounds per minute (3.33 rounds per second) - semi-auto
+    rocket: 60,   // 60 rounds per minute (1 round per second)
+    grenade: 120  // 120 rounds per minute (2 rounds per second)
+  };
+  private weaponFireModes: { [key: string]: 'auto' | 'semi' } = {
+    rifle: 'auto',
+    pistol: 'semi',
+    rocket: 'semi',
+    grenade: 'semi'
+  };
+  private isMouseHeld: boolean = false;
+  private lastFireTime: number = 0;
+  private autoFireTimer: number | null = null;
 
   constructor(scene: Phaser.Scene) {
     this.scene = scene;
@@ -116,6 +134,7 @@ export class InputSystem implements IGameSystem {
       this.inputState.mouse.buttons = pointer.buttons;
       if (pointer.leftButtonDown()) {
         this.inputState.mouse.leftPressed = true;
+        this.isMouseHeld = true;
         
         // Check if we should start grenade charging
         const weapon = this.weaponSlots[this.currentWeapon];
@@ -124,8 +143,13 @@ export class InputSystem implements IGameSystem {
           this.grenadeChargeStart = Date.now();
           this.isChargingGrenade = true;
         } else {
-          // Normal weapon fire for non-grenades
+          // Fire immediately on first click
           this.pendingWeaponFire = true;
+          
+          // Start auto-fire timer for full-auto weapons
+          if (weapon && this.weaponFireModes[weapon] === 'auto') {
+            this.startAutoFire();
+          }
         }
       }
       if (pointer.rightButtonDown()) {
@@ -139,6 +163,10 @@ export class InputSystem implements IGameSystem {
       this.inputState.mouse.buttons = pointer.buttons;
       if (pointer.leftButtonReleased()) {
         this.inputState.mouse.leftReleased = true;
+        this.isMouseHeld = false;
+        
+        // Stop auto-fire when mouse is released
+        this.stopAutoFire();
         
         // Check if we were charging a grenade
         if (this.isChargingGrenade && this.grenadeChargeStart > 0) {
@@ -217,6 +245,8 @@ export class InputSystem implements IGameSystem {
     // Clear pending actions
     this.pendingWeaponFire = false;
     this.pendingADSToggle = false;
+    // Stop auto-fire timer
+    this.stopAutoFire();
   }
 
   private sendInputToServer(): void {
@@ -242,6 +272,11 @@ export class InputSystem implements IGameSystem {
   setPlayerPosition(x: number, y: number): void {
     this.playerPosition.x = x;
     this.playerPosition.y = y;
+  }
+  
+  // Set WeaponUI reference for auto-reload functionality
+  setWeaponUI(weaponUI: any): void {
+    this.weaponUI = weaponUI;
   }
 
   // Calculate which direction is "forward" based on mouse position
@@ -332,6 +367,26 @@ export class InputSystem implements IGameSystem {
     
     // Skip if it's a grenade - handled by charging system
     if (weapon === 'grenade') return;
+    
+    // Check current ammo and trigger auto-reload if empty
+    if (this.weaponUI) {
+      const ammoData = this.weaponUI.getCurrentWeaponAmmo();
+      
+      // If we're out of ammo and not already reloading, trigger auto-reload
+      if (ammoData.current <= 0 && !ammoData.isReloading && ammoData.reserve > 0) {
+        // Trigger reload instead of firing
+        this.scene.events.emit('weapon:reload', {
+          weaponType: weapon,
+          timestamp: Date.now()
+        });
+        return; // Don't fire, just reload
+      }
+      
+      // If we're out of ammo and out of reserves, just click sound (no auto-reload)
+      if (ammoData.current <= 0) {
+        return; // Don't fire or reload
+      }
+    }
     
     // Decrease ammo locally for immediate feedback
     this.scene.events.emit('weapon:ammo:decrease', {
@@ -426,7 +481,8 @@ export class InputSystem implements IGameSystem {
     
     if (!toWeapon) return;
     
-    
+    // Stop auto-fire when switching weapons
+    this.stopAutoFire();
     
     this.currentWeapon = slot;
     
@@ -510,5 +566,47 @@ export class InputSystem implements IGameSystem {
 
   isAimingDownSights(): boolean {
     return this.isADS;
+  }
+  
+  // ===== AUTO-FIRE METHODS =====
+  
+  private startAutoFire(): void {
+    const weapon = this.weaponSlots[this.currentWeapon];
+    if (!weapon || this.weaponFireModes[weapon] !== 'auto') return;
+    
+    // Clear any existing timer
+    this.stopAutoFire();
+    
+    // Calculate fire interval based on RPM
+    const rpm = this.weaponRPM[weapon] || 600;
+    const fireInterval = (60 / rpm) * 1000; // Convert RPM to milliseconds between shots
+    
+    // Set up recurring timer for auto-fire
+    this.autoFireTimer = window.setInterval(() => {
+      // Stop if mouse no longer held or weapon changed
+      if (!this.isMouseHeld || this.weaponSlots[this.currentWeapon] !== weapon) {
+        this.stopAutoFire();
+        return;
+      }
+      
+      // Check if we can fire (has ammo, not reloading)
+      if (this.weaponUI) {
+        const ammoData = this.weaponUI.getCurrentWeaponAmmo();
+        if (ammoData.current <= 0 || ammoData.isReloading) {
+          this.stopAutoFire();
+          return;
+        }
+      }
+      
+      // Fire the weapon
+      this.pendingWeaponFire = true;
+    }, fireInterval);
+  }
+  
+  private stopAutoFire(): void {
+    if (this.autoFireTimer !== null) {
+      clearInterval(this.autoFireTimer);
+      this.autoFireTimer = null;
+    }
   }
 } 

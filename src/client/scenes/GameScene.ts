@@ -67,6 +67,9 @@ export class GameScene extends Phaser.Scene {
     // Connect VisionRenderer to PlayerManager for partial visibility
     this.playerManager.setVisionRenderer(this.visionRenderer);
     
+    // Connect WeaponUI to InputSystem for auto-reload functionality
+    this.inputSystem.setWeaponUI(this.weaponUI);
+    
     // Create player sprite using actual sprite assets
     this.playerSprite = this.assetManager.createPlayer(
       this.playerPosition.x,
@@ -649,6 +652,23 @@ export class GameScene extends Phaser.Scene {
           // Update our health from game state (authoritative)
           if ((serverPlayer as any).health !== undefined) {
             this.weaponUI.updateHealth((serverPlayer as any).health);
+          }
+          
+          // Update weapon data from game state (authoritative)
+          if ((serverPlayer as any).weapons) {
+            const weapons = (serverPlayer as any).weapons;
+            // Update each weapon type's ammo
+            for (const [weaponType, weaponData] of Object.entries(weapons)) {
+              const data = weaponData as any;
+              if (data.currentAmmo !== undefined && data.reserveAmmo !== undefined) {
+                this.weaponUI.updateWeaponData(
+                  weaponType, 
+                  data.currentAmmo, 
+                  data.reserveAmmo, 
+                  data.isReloading || false
+                );
+              }
+            }
           }
         }
       }

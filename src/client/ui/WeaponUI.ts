@@ -119,6 +119,14 @@ export class WeaponUI implements IGameSystem {
     this.scene.events.on('weapon:switch', (data: any) => {
       this.currentWeapon = data.toWeapon;
     });
+    
+    // Listen for reload start (for immediate UI feedback)
+    this.scene.events.on('weapon:reload', (data: any) => {
+      if (data.weaponType in this.weapons) {
+        const weapon = this.weapons[data.weaponType as keyof PlayerWeapons];
+        weapon.isReloading = true;
+      }
+    });
   }
 
   private removeEventListeners(): void {
