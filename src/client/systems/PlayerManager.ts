@@ -10,13 +10,16 @@ interface LastSeenData {
 
 interface PlayerSprite {
   container: Phaser.GameObjects.Container;
-  body: Phaser.GameObjects.Rectangle;
+  body: Phaser.GameObjects.Sprite;
+  weapon: Phaser.GameObjects.Sprite; // Add weapon sprite
   directionIndicator: Phaser.GameObjects.Graphics;
   team: 'red' | 'blue';
   lastUpdate: number;
   maskGraphics?: Phaser.GameObjects.Graphics;
   mask?: Phaser.Display.Masks.GeometryMask;
 }
+
+import { AssetManager } from '../utils/AssetManager';
 
 export class PlayerManager {
   private scene: Phaser.Scene;
@@ -25,6 +28,7 @@ export class PlayerManager {
   private localPlayerId: string | null = null;
   private visionRenderer: VisionRenderer | null = null;
   private partialVisibilityEnabled: boolean = true; // Enable by default
+  private assetManager: AssetManager;
   
   // Visual constants
   private readonly PLAYER_SIZE = 16;
@@ -35,6 +39,7 @@ export class PlayerManager {
   
   constructor(scene: Phaser.Scene) {
     this.scene = scene;
+    this.assetManager = new AssetManager(scene);
   }
   
   setLocalPlayerId(id: string): void {
@@ -171,9 +176,49 @@ export class PlayerManager {
     sprite.container.setPosition(state.position.x, state.position.y);
     
     // Update rotation based on velocity or angle if available
+    let playerAngle = 0;
     if (state.velocity && (state.velocity.x !== 0 || state.velocity.y !== 0)) {
-      const angle = Math.atan2(state.velocity.y, state.velocity.x);
-      sprite.directionIndicator.setRotation(angle);
+      playerAngle = Math.atan2(state.velocity.y, state.velocity.x);
+    } else if (state.angle !== undefined) {
+      playerAngle = state.angle;
+    }
+    
+    // Rotate player sprite and weapon to face direction
+    sprite.body.setRotation(playerAngle + Math.PI / 2); // Player rotated 90 degrees clockwise
+    sprite.directionIndicator.setRotation(playerAngle); // Direction indicator stays normal
+    
+    // Update weapon position and rotation for shoulder mounting
+    const shoulderOffset = 8; // Distance from center to shoulder
+    const shoulderAngle = playerAngle + Math.PI / 2; // 90 degrees clockwise for right side
+    const shoulderX = Math.cos(shoulderAngle) * shoulderOffset;
+    const shoulderY = Math.sin(shoulderAngle) * shoulderOffset;
+    
+    // Add forward offset (ahead of player)
+    const forwardOffset = 6; // Distance ahead of player
+    const forwardX = Math.cos(playerAngle) * forwardOffset;
+    const forwardY = Math.sin(playerAngle) * forwardOffset;
+    
+    // Combine both offsets (relative to container)
+    const weaponX = shoulderX + forwardX;
+    const weaponY = shoulderY + forwardY;
+    
+    sprite.weapon.setPosition(weaponX, weaponY); // Position relative to container
+    sprite.weapon.setRotation(playerAngle + Math.PI); // Weapon flipped 180 degrees (barrel away)
+    
+    // Update weapon type if it changed
+    if (state.weaponType && state.weaponType !== (sprite.weapon as any).weaponType) {
+      // Destroy old weapon and create new one
+      const oldWeapon = sprite.weapon;
+      sprite.container.remove(oldWeapon);
+      oldWeapon.destroy();
+      
+      // Create new weapon at shoulder position
+      sprite.weapon = this.assetManager.createWeapon(0, 0, state.weaponType, playerAngle);
+      sprite.weapon.setPosition(weaponX, weaponY); // Override position from createWeapon
+      sprite.weapon.setRotation(playerAngle + Math.PI); // Apply 180-degree flip
+      sprite.weapon.setDepth(19); // Just below player
+      sprite.container.add(sprite.weapon);
+      (sprite.weapon as any).weaponType = state.weaponType; // Store for comparison
     }
     
     // Update color based on health for visual feedback (subtle)
@@ -191,26 +236,65 @@ export class PlayerManager {
     const container = this.scene.add.container(state.position.x, state.position.y);
     container.setDepth(20);
     
-    // Player body
-    const teamColor = state.team === 'red' ? 0xff4444 : 0x4444ff;
-    const body = this.scene.add.rectangle(0, 0, this.PLAYER_SIZE, this.PLAYER_SIZE, teamColor);
-    body.setStrokeStyle(1, 0x000000);
+    // Use real player sprite (right-handed)
+    const body = this.assetManager.createPlayer(0, 0, state.team);
     container.add(body);
     
-    // Direction indicator (small triangle)
+    // Calculate initial rotation
+    let playerAngle = 0;
+    if (state.velocity && (state.velocity.x !== 0 || state.velocity.y !== 0)) {
+      playerAngle = Math.atan2(state.velocity.y, state.velocity.x);
+    } else if (state.angle !== undefined) {
+      playerAngle = state.angle;
+    }
+    
+    // Create weapon sprite at shoulder position
+    const weaponType = state.weaponType || 'rifle';
+    const shoulderOffset = 8; // Distance from center to shoulder
+    const shoulderAngle = playerAngle + Math.PI / 2; // 90 degrees clockwise for right side
+    const shoulderX = Math.cos(shoulderAngle) * shoulderOffset;
+    const shoulderY = Math.sin(shoulderAngle) * shoulderOffset;
+    
+    // Add forward offset (ahead of player)
+    const forwardOffset = 6; // Distance ahead of player
+    const forwardX = Math.cos(playerAngle) * forwardOffset;
+    const forwardY = Math.sin(playerAngle) * forwardOffset;
+    
+    // Combine both offsets (relative to container)
+    const weaponX = shoulderX + forwardX;
+    const weaponY = shoulderY + forwardY;
+    
+    const weapon = this.assetManager.createWeapon(0, 0, weaponType, playerAngle);
+    weapon.setPosition(weaponX, weaponY); // Override position from createWeapon
+    weapon.setRotation(playerAngle + Math.PI); // Apply 180-degree flip
+    weapon.setDepth(19); // Just below player
+    container.add(weapon);
+    (weapon as any).weaponType = weaponType; // Store for comparison
+    
+    // Apply correct rotations from the start
+    body.setRotation(playerAngle + Math.PI / 2); // Player rotated 90 degrees clockwise
+    
+    // Direction indicator (small triangle) - adjust for sprite size
     const directionIndicator = this.scene.add.graphics();
-    directionIndicator.fillStyle(0xffffff, 0.8);
+    directionIndicator.fillStyle(0xffffff, 0.9);
     directionIndicator.beginPath();
-    directionIndicator.moveTo(this.PLAYER_SIZE / 2, 0);
-    directionIndicator.lineTo(this.PLAYER_SIZE / 2 + 4, -2);
-    directionIndicator.lineTo(this.PLAYER_SIZE / 2 + 4, 2);
+    directionIndicator.moveTo(this.PLAYER_SIZE, 0);
+    directionIndicator.lineTo(this.PLAYER_SIZE + 6, -3);
+    directionIndicator.lineTo(this.PLAYER_SIZE + 6, 3);
     directionIndicator.closePath();
     directionIndicator.fillPath();
+    
+    // Add subtle black outline to direction indicator
+    directionIndicator.lineStyle(1, 0x000000, 0.8);
+    directionIndicator.strokePath();
+    directionIndicator.setRotation(playerAngle); // Direction indicator stays normal
+    
     container.add(directionIndicator);
     
     return {
       container,
       body,
+      weapon,
       directionIndicator,
       team: state.team,
       lastUpdate: Date.now()

@@ -5,6 +5,7 @@ import { indexToPixel, groupTilesIntoRectangles, pixelToIndex } from '../utils/v
 export class VisionRenderer {
   private scene: Phaser.Scene;
   private fogLayer: Phaser.GameObjects.RenderTexture;
+  private desaturationLayer: Phaser.GameObjects.RenderTexture;
   private visionDebugGraphics: Phaser.GameObjects.Graphics | null = null;
   private lastVisibleTiles: Set<number> = new Set();
   private lastPolygon: Vector2[] | null = null;
@@ -16,14 +17,21 @@ export class VisionRenderer {
     // Create render texture for fog - ensure it's positioned at origin
     this.fogLayer = scene.add.renderTexture(0, 0, GAME_CONFIG.GAME_WIDTH, GAME_CONFIG.GAME_HEIGHT);
     this.fogLayer.setOrigin(0, 0); // Ensure origin is top-left
-    this.fogLayer.setDepth(90); // Above game but below UI
+    this.fogLayer.setDepth(90); // Applied second, on top of desaturation
+    
+    // Create render texture for desaturation effect
+    this.desaturationLayer = scene.add.renderTexture(0, 0, GAME_CONFIG.GAME_WIDTH, GAME_CONFIG.GAME_HEIGHT);
+    this.desaturationLayer.setOrigin(0, 0);
+    this.desaturationLayer.setDepth(85); // Applied first, behind fog
+    this.desaturationLayer.setBlendMode(Phaser.BlendModes.COLOR_BURN); // Better desaturation effect
     
     // Create graphics object for polygon rendering
     this.visionGraphics = scene.add.graphics();
     this.visionGraphics.setDepth(89); // Just below fog
     
-    // Fill with black fog initially
-    this.fogLayer.fill(0x000000, 0.9);
+    // Fill with initial fog and desaturation
+    this.fogLayer.fill(0x000000, 0.85); // Much darker for stronger fog effect
+    this.desaturationLayer.fill(0x606060, 0.9); // Darker gray for stronger desaturation
   }
   
   // Main update method that handles both polygon and tile-based vision
@@ -47,19 +55,21 @@ export class VisionRenderer {
     // Store polygon for debugging
     this.lastPolygon = visionData.polygon;
     
-
-    
-    // Clear fog layer
+    // Clear both layers
     this.fogLayer.clear();
+    this.desaturationLayer.clear();
     
-    // Method 1: Use a mask to show only the visible area
-    const graphics = this.scene.make.graphics({ x: 0, y: 0 }, false);
+    // Create fog effect (darkening)
+    const fogGraphics = this.scene.make.graphics({ x: 0, y: 0 }, false);
+    fogGraphics.fillStyle(0x000000, 0.85); // Much darker fog
+    fogGraphics.fillRect(0, 0, GAME_CONFIG.GAME_WIDTH, GAME_CONFIG.GAME_HEIGHT);
     
-    // Fill entire screen with fog
-    graphics.fillStyle(0x000000, 0.85);
-    graphics.fillRect(0, 0, GAME_CONFIG.GAME_WIDTH, GAME_CONFIG.GAME_HEIGHT);
+    // Create desaturation effect  
+    const desatGraphics = this.scene.make.graphics({ x: 0, y: 0 }, false);
+    desatGraphics.fillStyle(0x606060, 0.8); // Darker gray for stronger desaturation
+    desatGraphics.fillRect(0, 0, GAME_CONFIG.GAME_WIDTH, GAME_CONFIG.GAME_HEIGHT);
     
-    // Create a second graphics object for the visible area
+    // Create mask for visible area
     const maskGraphics = this.scene.make.graphics({ x: 0, y: 0 }, false);
     maskGraphics.fillStyle(0xffffff, 1);
     
@@ -74,21 +84,29 @@ export class VisionRenderer {
     maskGraphics.closePath();
     maskGraphics.fillPath();
     
-    // Create geometry mask
-    const mask = maskGraphics.createGeometryMask();
-    graphics.setMask(mask);
-    mask.invertAlpha = true; // Invert so polygon area is clear
+    // Apply mask to both fog and desaturation (inverted so polygon area is clear)
+    const fogMask = maskGraphics.createGeometryMask();
+    const desatMask = maskGraphics.createGeometryMask();
     
-    // Draw the masked fog to render texture
-    this.fogLayer.draw(graphics);
+    fogGraphics.setMask(fogMask);
+    desatGraphics.setMask(desatMask);
+    fogMask.invertAlpha = true;
+    desatMask.invertAlpha = true;
+    
+    // Draw the masked effects to render textures
+    this.fogLayer.draw(fogGraphics);
+    this.desaturationLayer.draw(desatGraphics);
     
     // Clean up
-    graphics.destroy();
+    fogGraphics.destroy();
+    desatGraphics.destroy();
     maskGraphics.destroy();
-    mask.destroy();
+    fogMask.destroy();
+    desatMask.destroy();
     
-    // Update depth
-    this.fogLayer.setDepth(100);
+    // Update depths
+    this.desaturationLayer.setDepth(85);
+    this.fogLayer.setDepth(90);
   }
 
   // Update vision using tile data (legacy)
@@ -99,38 +117,40 @@ export class VisionRenderer {
     // Store for debugging
     this.lastVisibleTiles = visibleSet;
     
-    // Debug logging once
-    if (visibleTiles.length > 0 && !(this as any).loggedVisionOnce) {
-      (this as any).loggedVisionOnce = true;
-
-    }
-    
-    // Clear the fog layer completely
+    // Clear both layers
     this.fogLayer.clear();
+    this.desaturationLayer.clear();
     
-    // Create a graphics object for drawing fog
-    const graphics = this.scene.make.graphics({ x: 0, y: 0 }, false);
-    graphics.fillStyle(0x000000, 0.85);
+    // Create graphics for fog and desaturation
+    const fogGraphics = this.scene.make.graphics({ x: 0, y: 0 }, false);
+    const desatGraphics = this.scene.make.graphics({ x: 0, y: 0 }, false);
     
-    // Draw fog for each tile that is NOT visible
+    fogGraphics.fillStyle(0x000000, 0.85); // Much darker fog
+    desatGraphics.fillStyle(0x606060, 0.8); // Darker gray for stronger desaturation
+    
+    // Draw fog and desaturation for each tile that is NOT visible
     const totalTiles = VISION_CONSTANTS.GRID_WIDTH * VISION_CONSTANTS.GRID_HEIGHT;
     for (let tileIndex = 0; tileIndex < totalTiles; tileIndex++) {
       // Skip if this tile is visible
       if (visibleSet.has(tileIndex)) continue;
       
-      // Draw fog for this non-visible tile
+      // Draw effects for this non-visible tile
       const pixelPos = indexToPixel(tileIndex);
-      graphics.fillRect(pixelPos.x, pixelPos.y, VISION_CONSTANTS.TILE_SIZE, VISION_CONSTANTS.TILE_SIZE);
+      fogGraphics.fillRect(pixelPos.x, pixelPos.y, VISION_CONSTANTS.TILE_SIZE, VISION_CONSTANTS.TILE_SIZE);
+      desatGraphics.fillRect(pixelPos.x, pixelPos.y, VISION_CONSTANTS.TILE_SIZE, VISION_CONSTANTS.TILE_SIZE);
     }
     
-    // Draw the graphics to the render texture
-    this.fogLayer.draw(graphics);
+    // Draw the graphics to the render textures
+    this.fogLayer.draw(fogGraphics);
+    this.desaturationLayer.draw(desatGraphics);
     
     // Clean up
-    graphics.destroy();
+    fogGraphics.destroy();
+    desatGraphics.destroy();
     
-    // Make sure fog layer is on top
-    this.fogLayer.setDepth(100);
+    // Update depths
+    this.desaturationLayer.setDepth(85);
+    this.fogLayer.setDepth(90);
   }
 
   
@@ -182,12 +202,12 @@ export class VisionRenderer {
       }
       
       // Show stats
-      const debugText = `Polygon vertices: ${this.lastPolygon.length}`;
+      const debugText = `Polygon vertices: ${this.lastPolygon.length} | Enhanced fog with desaturation`;
       const style = { fontSize: '10px', color: '#00ff00' };
       const text = this.scene.add.text(5, 5, debugText, style);
       text.setName('visionDebugText');
       text.setDepth(92);
-    } 
+    }
     // Draw tiles if using tile system
     else if (this.lastVisibleTiles.size > 0) {
       // Draw visible tiles as semi-transparent squares
@@ -198,7 +218,7 @@ export class VisionRenderer {
       }
       
       // Show stats
-      const debugText = `Visible tiles: ${this.lastVisibleTiles.size}`;
+      const debugText = `Visible tiles: ${this.lastVisibleTiles.size} | Enhanced fog with desaturation`;
       const style = { fontSize: '10px', color: '#00ff00' };
       const text = this.scene.add.text(5, 5, debugText, style);
       text.setName('visionDebugText');
@@ -213,6 +233,7 @@ export class VisionRenderer {
   
   destroy(): void {
     this.fogLayer.destroy();
+    this.desaturationLayer.destroy();
     if (this.visionDebugGraphics) {
       this.visionDebugGraphics.destroy();
     }

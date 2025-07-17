@@ -1,5 +1,5 @@
 import { IGameSystem } from '../../../shared/interfaces/IGameSystem';
-import { PhaserMuzzleFlash } from '../effects/PhaserMuzzleFlash';
+import { AssetManager } from '../utils/AssetManager';
 
 interface BulletTrail {
   line: Phaser.GameObjects.Graphics;
@@ -28,7 +28,9 @@ interface PendingShot {
 
 export class VisualEffectsSystem implements IGameSystem {
   private scene: Phaser.Scene;
-  private muzzleFlashes: PhaserMuzzleFlash[] = [];
+  private assetManager: AssetManager;
+  private muzzleFlashes: Phaser.GameObjects.Sprite[] = [];
+  private explosions: Phaser.GameObjects.Sprite[] = [];
   private hitMarkers: Phaser.GameObjects.Graphics[] = [];
   private particles: Phaser.GameObjects.Graphics[] = [];
   private bulletTrails: BulletTrail[] = [];
@@ -37,6 +39,7 @@ export class VisualEffectsSystem implements IGameSystem {
 
   constructor(scene: Phaser.Scene) {
     this.scene = scene;
+    this.assetManager = new AssetManager(scene);
   }
 
   initialize(): void {
@@ -46,12 +49,19 @@ export class VisualEffectsSystem implements IGameSystem {
   }
 
   update(deltaTime: number): void {
-    // Update muzzle flashes
+    // Update muzzle flashes (they auto-destroy via tweens, so just clean up destroyed ones)
     for (let i = this.muzzleFlashes.length - 1; i >= 0; i--) {
       const flash = this.muzzleFlashes[i];
-      if (!flash.update()) {
-        flash.destroy();
+      if (!flash.active) {
         this.muzzleFlashes.splice(i, 1);
+      }
+    }
+
+    // Update explosions (they auto-destroy via animation complete, so just clean up)
+    for (let i = this.explosions.length - 1; i >= 0; i--) {
+      const explosion = this.explosions[i];
+      if (!explosion.active) {
+        this.explosions.splice(i, 1);
       }
     }
 
@@ -71,6 +81,9 @@ export class VisualEffectsSystem implements IGameSystem {
   destroy(): void {
     this.muzzleFlashes.forEach(flash => flash.destroy());
     this.muzzleFlashes = [];
+    
+    this.explosions.forEach(explosion => explosion.destroy());
+    this.explosions = [];
     
     this.hitMarkers.forEach(marker => marker.destroy());
     this.hitMarkers = [];
@@ -95,7 +108,7 @@ export class VisualEffectsSystem implements IGameSystem {
     this.scene.events.on('backend:weapon:fired', (data: any) => {
       // For now, just show muzzle flash since backend doesn't send hit data properly
       if (data.position) {
-        this.showMuzzleFlash(data.position, data.direction);
+        this.showMuzzleFlash(data.position, data.direction, data.weaponType || 'rifle');
       }
     });
 
@@ -193,7 +206,7 @@ export class VisualEffectsSystem implements IGameSystem {
   private setupLocalEventListeners(): void {
     // Listen for local weapon firing for immediate feedback
     this.scene.events.on('weapon:fire', (data: any) => {
-      this.showMuzzleFlash(data.position, data.direction);
+      this.showMuzzleFlash(data.position, data.direction, data.weaponType);
       
       // Store pending shot info for backend response matching
       const socket = (this.scene as any).networkSystem?.getSocket();
@@ -296,10 +309,11 @@ export class VisualEffectsSystem implements IGameSystem {
 
   // Public methods for creating effects
   
-  showMuzzleFlash(position: { x: number; y: number }, direction: number): void {
-    const flash = new PhaserMuzzleFlash(this.scene, position, direction);
-    this.muzzleFlashes.push(flash);
-
+  showMuzzleFlash(position: { x: number; y: number }, direction: number, weaponType: string = 'rifle'): void {
+    const flash = this.assetManager.showMuzzleFlash(position.x, position.y, direction, weaponType);
+    if (flash) {
+      this.muzzleFlashes.push(flash);
+    }
   }
 
   showHitMarker(position: { x: number; y: number }): void {
@@ -360,44 +374,30 @@ export class VisualEffectsSystem implements IGameSystem {
   }
 
   showExplosionEffect(position: { x: number; y: number }, radius: number): void {
-    // Create explosion particles
-    const particleCount = Math.min(20, Math.floor(radius / 2));
+    // Use real explosion animation
+    const explosion = this.assetManager.showExplosion(position.x, position.y);
+    this.explosions.push(explosion);
+    
+    // Add some particle debris for extra impact
+    const particleCount = Math.min(12, Math.floor(radius / 3));
     
     for (let i = 0; i < particleCount; i++) {
       const particle = this.scene.add.graphics();
       particle.setDepth(55);
       
-      // Alternate between orange and red
+      // Alternate between orange and red debris
       const color = i % 2 === 0 ? 0xFF8000 : 0xFF0000;
       particle.fillStyle(color);
       particle.fillRect(0, 0, 2, 2);
       
       // Position in circle around explosion center
       const angle = (Math.PI * 2 * i) / particleCount;
-      const distance = Math.random() * radius;
+      const distance = Math.random() * radius * 0.7;
       particle.x = position.x + Math.cos(angle) * distance;
       particle.y = position.y + Math.sin(angle) * distance;
       
       this.particles.push(particle);
     }
-    
-    // Create explosion flash (temporary bright circle)
-    const flash = this.scene.add.graphics();
-    flash.setDepth(60);
-    flash.fillStyle(0xFFFFFF, 0.8);
-    flash.fillCircle(position.x, position.y, radius * 0.3);
-    
-    // Fade out the flash quickly
-    this.scene.tweens.add({
-      targets: flash,
-      alpha: 0,
-      duration: 100,
-      onComplete: () => {
-        flash.destroy();
-      }
-    });
-    
-
   }
 
   private getDebrisColors(material: string): number[] {
@@ -563,9 +563,10 @@ export class VisualEffectsSystem implements IGameSystem {
 
   // Debug methods
   
-  getEffectCounts(): { muzzleFlashes: number; hitMarkers: number; particles: number; bulletTrails: number } {
+  getEffectCounts(): { muzzleFlashes: number; explosions: number; hitMarkers: number; particles: number; bulletTrails: number } {
     return {
       muzzleFlashes: this.muzzleFlashes.length,
+      explosions: this.explosions.length,
       hitMarkers: this.hitMarkers.length,
       particles: this.particles.length,
       bulletTrails: this.bulletTrails.length
@@ -576,6 +577,10 @@ export class VisualEffectsSystem implements IGameSystem {
     // Clear muzzle flashes
     this.muzzleFlashes.forEach(flash => flash.destroy());
     this.muzzleFlashes = [];
+    
+    // Clear explosions
+    this.explosions.forEach(explosion => explosion.destroy());
+    this.explosions = [];
     
     // Clear hit markers
     this.hitMarkers.forEach(marker => marker.destroy());
@@ -594,8 +599,6 @@ export class VisualEffectsSystem implements IGameSystem {
     this.projectiles.clear();
 
     this.pendingShots.clear();
-    
-
   }
 
   private createProjectile(data: any): void {

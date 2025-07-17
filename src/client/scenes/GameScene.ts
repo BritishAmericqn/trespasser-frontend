@@ -9,6 +9,8 @@ import { PlayerManager } from '../systems/PlayerManager';
 import { GAME_CONFIG } from '../../../shared/constants/index';
 import { GameState, CollisionEvent, Vector2, PolygonVision } from '../../../shared/types/index';
 
+import { AssetManager } from '../utils/AssetManager';
+
 export class GameScene extends Phaser.Scene {
   private inputSystem!: InputSystem;
   private networkSystem!: NetworkSystem;
@@ -18,7 +20,9 @@ export class GameScene extends Phaser.Scene {
   private clientPrediction!: ClientPrediction;
   private visionRenderer!: VisionRenderer;
   private playerManager!: PlayerManager;
-  private player!: Phaser.GameObjects.Rectangle;
+  private assetManager!: AssetManager;
+  private playerSprite!: Phaser.GameObjects.Sprite; // Changed from Rectangle to Sprite
+  private playerWeapon!: Phaser.GameObjects.Sprite; // Add weapon sprite
   private playerPosition: { x: number; y: number };
   private playerRotation: number = 0;
   private connectionStatus!: Phaser.GameObjects.Text;
@@ -30,23 +34,25 @@ export class GameScene extends Phaser.Scene {
   private weaponText!: Phaser.GameObjects.Text;
   private grenadeChargeBar!: Phaser.GameObjects.Graphics;
   private wallGraphics!: Phaser.GameObjects.Graphics;
+  private wallSliceSprites: Map<string, Phaser.GameObjects.Sprite> = new Map(); // Back to regular Sprite
+  private floorSprites: Phaser.GameObjects.Sprite[] = [];
   private debugOverlay!: Phaser.GameObjects.Text;
   private lastGameStateTime: number = 0;
+  // Server position indicator visibility flag
+  private showServerIndicator: boolean = false;
+
 
   constructor() {
     super({ key: 'GameScene' });
-    this.playerPosition = { 
-      x: GAME_CONFIG.GAME_WIDTH / 2, 
-      y: GAME_CONFIG.GAME_HEIGHT / 2 
-    };
+    this.playerPosition = { x: 240, y: 135 }; // Center of 480x270
   }
 
   create(): void {
-
+    // Initialize AssetManager first
+    this.assetManager = new AssetManager(this);
     
-    // Create background
-    this.add.rectangle(0, 0, GAME_CONFIG.GAME_WIDTH, GAME_CONFIG.GAME_HEIGHT, 0x2d2d2d)
-      .setOrigin(0, 0);
+    // Create floor background using actual floor texture
+    this.createFloorBackground();
 
     // Initialize systems first (before using them)
     this.inputSystem = new InputSystem(this);
@@ -61,19 +67,28 @@ export class GameScene extends Phaser.Scene {
     // Connect VisionRenderer to PlayerManager for partial visibility
     this.playerManager.setVisionRenderer(this.visionRenderer);
     
-    // Create player sprite (simple colored square)
-    this.player = this.add.rectangle(
+    // Create player sprite using actual sprite assets
+    this.playerSprite = this.assetManager.createPlayer(
       this.playerPosition.x,
       this.playerPosition.y,
-      20,
-      20,
-      0x00ff00
+      'blue' // Default team, will be updated from backend
     );
+    this.playerSprite.setDepth(21); // Above other players
+    this.playerSprite.setRotation(Math.PI / 2); // Start with 90-degree clockwise rotation
+    
+    // Create weapon sprite for local player
+    this.playerWeapon = this.assetManager.createWeapon(
+      this.playerPosition.x,
+      this.playerPosition.y,
+      'rifle', // Default weapon
+      0 // Initial facing angle
+    );
+    this.playerWeapon.setDepth(20); // Just below player
     
     // Initialize client prediction with starting position
     this.clientPrediction.reset(this.playerPosition);
     
-    // Create backend position indicator (red outline square)
+    // Create backend position indicator (red outline square) - HIDDEN by default
     const backendIndicator = this.add.rectangle(
       this.playerPosition.x,
       this.playerPosition.y,
@@ -82,6 +97,7 @@ export class GameScene extends Phaser.Scene {
     );
     backendIndicator.setStrokeStyle(2, 0xff0000);
     backendIndicator.setDepth(5);
+    backendIndicator.setVisible(this.showServerIndicator); // Hidden by default
     
     // Store reference for updating
     (this as any).backendIndicator = backendIndicator;
@@ -102,7 +118,21 @@ export class GameScene extends Phaser.Scene {
     this.clientPrediction.setPositionCallback((pos) => {
       this.playerPosition.x = pos.x;
       this.playerPosition.y = pos.y;
-      this.player.setPosition(pos.x, pos.y);
+      this.playerSprite.setPosition(pos.x, pos.y); // Update sprite position
+      
+      // Update weapon position with both shoulder and forward offsets
+      const shoulderOffset = 8; // Distance from center to shoulder  
+      const shoulderAngle = this.playerRotation + Math.PI / 2; // 90 degrees clockwise for right side
+      const shoulderX = Math.cos(shoulderAngle) * shoulderOffset;
+      const shoulderY = Math.sin(shoulderAngle) * shoulderOffset;
+      
+      const forwardOffset = 6; // Distance ahead of player
+      const forwardX = Math.cos(this.playerRotation) * forwardOffset;
+      const forwardY = Math.sin(this.playerRotation) * forwardOffset;
+      
+      const weaponX = pos.x + shoulderX + forwardX;
+      const weaponY = pos.y + shoulderY + forwardY;
+      this.playerWeapon.setPosition(weaponX, weaponY);
     });
 
     // Create UI elements using Phaser
@@ -136,6 +166,43 @@ export class GameScene extends Phaser.Scene {
       worldPoint.x - this.playerPosition.x
     );
 
+    // Update player sprite rotation to face mouse (rotated 90 degrees clockwise)
+    this.playerSprite.setRotation(this.playerRotation + Math.PI / 2);
+    
+    // Update weapon position and rotation for shoulder mounting
+    const shoulderOffset = 8; // Distance from center to shoulder
+    const shoulderAngle = this.playerRotation + Math.PI / 2; // 90 degrees clockwise for right side
+    const shoulderX = Math.cos(shoulderAngle) * shoulderOffset;
+    const shoulderY = Math.sin(shoulderAngle) * shoulderOffset;
+    
+    // Add forward offset (ahead of player)
+    const forwardOffset = 6; // Distance ahead of player
+    const forwardX = Math.cos(this.playerRotation) * forwardOffset;
+    const forwardY = Math.sin(this.playerRotation) * forwardOffset;
+    
+    // Combine both offsets
+    const weaponX = this.playerPosition.x + shoulderX + forwardX;
+    const weaponY = this.playerPosition.y + shoulderY + forwardY;
+    
+    this.playerWeapon.setPosition(weaponX, weaponY);
+    this.playerWeapon.setRotation(this.playerRotation + Math.PI); // Weapon flipped 180 degrees
+
+    // Update weapon type if it changed
+    const currentWeapon = this.inputSystem.getCurrentWeapon();
+    if (currentWeapon && currentWeapon !== (this.playerWeapon as any).weaponType) {
+      // Destroy old weapon and create new one
+      this.playerWeapon.destroy();
+      
+      this.playerWeapon = this.assetManager.createWeapon(
+        this.playerPosition.x,
+        this.playerPosition.y,
+        currentWeapon,
+        this.playerRotation // Pass current facing angle
+      );
+      this.playerWeapon.setDepth(20);
+      (this.playerWeapon as any).weaponType = currentWeapon; // Store for comparison
+    }
+
     // Vision is now updated from backend game state only
     // No local vision calculation needed!
 
@@ -157,7 +224,10 @@ export class GameScene extends Phaser.Scene {
       const color = this.lastGameStateTime > 0 && (Date.now() - this.lastGameStateTime) < 5000 
         ? '#00ff00' 
         : '#ff0000';
-      this.debugOverlay.setText(`Last Game State: ${timeSinceLastState}s ago`);
+      
+      const fogEnabled = (this.visionRenderer as any).fogLayer?.visible ?? true;
+      const fogStatusDisplay = fogEnabled ? 'ENABLED' : 'DISABLED';
+      this.debugOverlay.setText(`Last Game State: ${timeSinceLastState}s ago | Fog: ${fogStatusDisplay}`);
       this.debugOverlay.setColor(color);
     }
   }
@@ -195,19 +265,8 @@ export class GameScene extends Phaser.Scene {
     this.wallGraphics = this.add.graphics();
     this.wallGraphics.setDepth(5);
     
-    // Create game bounds indicator (always visible)
-    const boundsGraphics = this.add.graphics();
-    boundsGraphics.setDepth(4);
-    boundsGraphics.lineStyle(1, 0x00ff00, 0.3);
-    boundsGraphics.strokeRect(0, 0, GAME_CONFIG.GAME_WIDTH, GAME_CONFIG.GAME_HEIGHT);
-    boundsGraphics.fillStyle(0x00ff00, 0.1);
-    
-    // Add corner markers
-    const cornerSize = 10;
-    boundsGraphics.fillRect(0, 0, cornerSize, cornerSize); // Top-left
-    boundsGraphics.fillRect(GAME_CONFIG.GAME_WIDTH - cornerSize, 0, cornerSize, cornerSize); // Top-right
-    boundsGraphics.fillRect(0, GAME_CONFIG.GAME_HEIGHT - cornerSize, cornerSize, cornerSize); // Bottom-left
-    boundsGraphics.fillRect(GAME_CONFIG.GAME_WIDTH - cornerSize, GAME_CONFIG.GAME_HEIGHT - cornerSize, cornerSize, cornerSize); // Bottom-right
+    // Remove the green game bounds graphics that were causing "green tiling"
+    // No more green bounds overlay
   }
 
   private updatePhaserUI(): void {
@@ -293,111 +352,101 @@ export class GameScene extends Phaser.Scene {
   }
 
   private updateWallsFromDestructionRenderer(): void {
+    // Clear any previous graphics overlays (for debug mode)
     this.wallGraphics.clear();
     
     // Get walls from DestructionRenderer - only include boundary walls if debug mode is on
     const showBoundaryWalls = (this as any).showBoundaryWalls || false;
     const walls = this.destructionRenderer.getWallsData(showBoundaryWalls);
     
+    // Track which wall slices we should have sprites for
+    const expectedSliceIds = new Set<string>();
+    
     walls.forEach(wall => {
-      
       // Check if this is a 10x10 pillar (special case)
       const isPillar = wall.width === 10 && wall.height === 10;
       
-      // Render each slice based on orientation
+      // Render each slice individually - back to one slice = one sprite
       for (let i = 0; i < 5; i++) {
         const sliceHealth = wall.sliceHealth[i];
         const isDestroyed = wall.destructionMask[i] === 1;
+        const sliceId = `wall_${wall.id}_slice_${i}`;
         
+        // Skip destroyed slices completely
+        if (isDestroyed) {
+          // Remove sprite if it exists
+          if (this.wallSliceSprites.has(sliceId)) {
+            this.wallSliceSprites.get(sliceId)!.destroy();
+            this.wallSliceSprites.delete(sliceId);
+          }
+          continue;
+        }
+        
+        expectedSliceIds.add(sliceId);
+        
+        // Calculate slice position and dimensions
         let sliceX: number, sliceY: number, sliceWidth: number, sliceHeight: number;
         
         if (isPillar) {
           // Special case: 10x10 pillars have 2px tall horizontal slices
           sliceWidth = wall.width;
           sliceHeight = 2;
-          sliceX = wall.position.x;
-          sliceY = wall.position.y + (i * sliceHeight);
+          sliceX = wall.position.x + sliceWidth / 2;
+          sliceY = wall.position.y + (i * sliceHeight) + sliceHeight / 2;
         } else if (wall.orientation === 'horizontal') {
           // Horizontal wall: vertical slices (divide width by 5)
           sliceWidth = wall.width / 5;
           sliceHeight = wall.height;
-          sliceX = wall.position.x + (i * sliceWidth);
-          sliceY = wall.position.y;
+          sliceX = wall.position.x + (i * sliceWidth) + sliceWidth / 2;
+          sliceY = wall.position.y + sliceHeight / 2;
         } else {
           // Vertical wall: horizontal slices (divide height by 5)
           sliceWidth = wall.width;
           sliceHeight = wall.height / 5;
-          sliceX = wall.position.x;
-          sliceY = wall.position.y + (i * sliceHeight);
+          sliceX = wall.position.x + sliceWidth / 2;
+          sliceY = wall.position.y + (i * sliceHeight) + sliceHeight / 2;
         }
         
-        // Skip rendering destroyed slices completely - they should be invisible
-        if (isDestroyed) {
-          // Only show destroyed slices if debug mode is enabled
-          const showEnhanced = (this as any).showDestroyedSlices;
-          if (showEnhanced) {
-            // Enhanced visualization for debugging only
-            this.wallGraphics.fillStyle(0xff0000, 0.4);
-            this.wallGraphics.fillRect(sliceX, sliceY, sliceWidth, sliceHeight);
-            this.wallGraphics.lineStyle(1, 0xffff00, 0.8);
-            this.wallGraphics.strokeRect(sliceX, sliceY, sliceWidth, sliceHeight);
-          }
-          // Skip rendering - destroyed slices should be completely invisible
-          continue;
+        // Create or update wall slice sprite - back to simple createWall
+        if (!this.wallSliceSprites.has(sliceId)) {
+          // Determine material type for sprite selection
+          const material = wall.material === 'wood' ? 'wood' : 'concrete';
+          
+          // Create simple wall slice sprite (one slice = one texture)
+          const sliceSprite = this.assetManager.createWall(sliceX, sliceY, material);
+          sliceSprite.setDepth(10); // Above floor but below players
+          
+          this.wallSliceSprites.set(sliceId, sliceSprite);
         }
         
-        // Determine damage state
+        // Update wall slice appearance based on damage
+        const sliceSprite = this.wallSliceSprites.get(sliceId)!;
         const healthPercent = sliceHealth / wall.maxHealth;
-        const baseColor = this.getMaterialColor(wall.material);
         
-        // Apply damage darkening or glass transparency
-        let alpha = 1.0;
-        
-        // Special handling for glass material
-        if (wall.material === 'glass' && healthPercent < 0.5) {
-          alpha = 0.3 + (healthPercent * 0.7);
-        } else if (healthPercent <= 0.25) {
-          alpha = 0.6; // Critical damage
+        // Apply damage effects to sprite
+        if (healthPercent <= 0.25) {
+          sliceSprite.setAlpha(0.6); // Critical damage
+          sliceSprite.setTint(0x888888); // Darker
         } else if (healthPercent <= 0.75) {
-          alpha = 0.8; // Damaged
-        }
-        
-        // Draw slice
-        this.wallGraphics.fillStyle(baseColor, alpha);
-        this.wallGraphics.fillRect(sliceX, sliceY, sliceWidth, sliceHeight);
-        
-        // Add damage cracks for visual feedback
-        if (healthPercent < 0.75) {
-          this.wallGraphics.lineStyle(1, 0x000000, 0.5);
-          const numCracks = Math.floor((1 - healthPercent) * 3);
-          for (let j = 0; j < numCracks; j++) {
-            const x1 = sliceX + Math.random() * sliceWidth;
-            const y1 = sliceY + Math.random() * sliceHeight;
-            const x2 = x1 + (Math.random() - 0.5) * 6;
-            const y2 = y1 + (Math.random() - 0.5) * 6;
-            this.wallGraphics.beginPath();
-            this.wallGraphics.moveTo(x1, y1);
-            this.wallGraphics.lineTo(x2, y2);
-            this.wallGraphics.strokePath();
-          }
+          sliceSprite.setAlpha(0.8); // Damaged
+          sliceSprite.setTint(0xcccccc); // Slightly darker
+        } else {
+          sliceSprite.setAlpha(1.0); // Healthy
+          sliceSprite.setTint(0xffffff); // Normal color
         }
       }
       
-      // Draw wall border - only for boundary walls
+      // Draw boundary wall indicators using graphics (debug)
       const isBoundaryWall = wall.position.x < 0 || wall.position.y < 0 || 
                             wall.position.x >= GAME_CONFIG.GAME_WIDTH || 
                             wall.position.y >= GAME_CONFIG.GAME_HEIGHT;
       
-      if (isBoundaryWall) {
-        // Draw boundary walls with a distinctive red border
+      if (isBoundaryWall && showBoundaryWalls) {
+        // Draw boundary walls with a distinctive red border for debugging
         this.wallGraphics.lineStyle(2, 0xff0000, 0.8);
         this.wallGraphics.strokeRect(wall.position.x, wall.position.y, wall.width, wall.height);
-      }
-      // Remove the gray outline for normal walls
-      
-      // Add visual indicator for boundary walls
-      if (isBoundaryWall) {
-        // Draw diagonal lines to indicate boundary wall
+        
+        // Add visual indicator for boundary walls
         this.wallGraphics.lineStyle(1, 0xff0000, 0.3);
         this.wallGraphics.beginPath();
         this.wallGraphics.moveTo(wall.position.x, wall.position.y);
@@ -407,6 +456,14 @@ export class GameScene extends Phaser.Scene {
         this.wallGraphics.strokePath();
       }
     });
+    
+    // Remove sprites for wall slices that no longer exist
+    for (const [sliceId, sprite] of this.wallSliceSprites.entries()) {
+      if (!expectedSliceIds.has(sliceId)) {
+        sprite.destroy();
+        this.wallSliceSprites.delete(sliceId);
+      }
+    }
   }
 
   private getMaterialColor(material: string): number {
@@ -603,7 +660,21 @@ export class GameScene extends Phaser.Scene {
         // Apply corrected position directly
         this.playerPosition.x = collision.position.x;
         this.playerPosition.y = collision.position.y;
-        this.player.setPosition(collision.position.x, collision.position.y);
+        this.playerSprite.setPosition(collision.position.x, collision.position.y);
+        
+        // Update weapon position with both offsets
+        const shoulderOffset = 8;
+        const shoulderAngle = this.playerRotation + Math.PI / 2;
+        const shoulderX = Math.cos(shoulderAngle) * shoulderOffset;
+        const shoulderY = Math.sin(shoulderAngle) * shoulderOffset;
+        
+        const forwardOffset = 6;
+        const forwardX = Math.cos(this.playerRotation) * forwardOffset;
+        const forwardY = Math.sin(this.playerRotation) * forwardOffset;
+        
+        const weaponX = collision.position.x + shoulderX + forwardX;
+        const weaponY = collision.position.y + shoulderY + forwardY;
+        this.playerWeapon.setPosition(weaponX, weaponY);
         
         // Reset client prediction to new position
         this.clientPrediction.reset(collision.position);
@@ -690,13 +761,42 @@ export class GameScene extends Phaser.Scene {
       // Large drift - snap to server position
       this.playerPosition.x = serverPos.x;
       this.playerPosition.y = serverPos.y;
-      this.player.setPosition(this.playerPosition.x, this.playerPosition.y);
+      this.playerSprite.setPosition(this.playerPosition.x, this.playerPosition.y);
+      
+      // Update weapon position with both offsets
+      const shoulderOffset = 8;
+      const shoulderAngle = this.playerRotation + Math.PI / 2;
+      const shoulderX = Math.cos(shoulderAngle) * shoulderOffset;
+      const shoulderY = Math.sin(shoulderAngle) * shoulderOffset;
+      
+      const forwardOffset = 6;
+      const forwardX = Math.cos(this.playerRotation) * forwardOffset;
+      const forwardY = Math.sin(this.playerRotation) * forwardOffset;
+      
+      const weaponX = this.playerPosition.x + shoulderX + forwardX;
+      const weaponY = this.playerPosition.y + shoulderY + forwardY;
+      this.playerWeapon.setPosition(weaponX, weaponY);
+      
       console.warn('⚠️ Large drift detected, snapping to backend position');
     } else if (drift > 5) {
       // Small drift - smooth correction
       this.playerPosition.x += (serverPos.x - localPos.x) * 0.2;
       this.playerPosition.y += (serverPos.y - localPos.y) * 0.2;
-      this.player.setPosition(this.playerPosition.x, this.playerPosition.y);
+      this.playerSprite.setPosition(this.playerPosition.x, this.playerPosition.y);
+      
+      // Update weapon position with both offsets
+      const shoulderOffset = 8;
+      const shoulderAngle = this.playerRotation + Math.PI / 2;
+      const shoulderX = Math.cos(shoulderAngle) * shoulderOffset;
+      const shoulderY = Math.sin(shoulderAngle) * shoulderOffset;
+      
+      const forwardOffset = 6;
+      const forwardX = Math.cos(this.playerRotation) * forwardOffset;
+      const forwardY = Math.sin(this.playerRotation) * forwardOffset;
+      
+      const weaponX = this.playerPosition.x + shoulderX + forwardX;
+      const weaponY = this.playerPosition.y + shoulderY + forwardY;
+      this.playerWeapon.setPosition(weaponX, weaponY);
     }
   }
 
@@ -705,7 +805,7 @@ export class GameScene extends Phaser.Scene {
     const inputState = this.inputSystem.getInputState();
     const movement = this.inputSystem.getMovementDirection();
     const speed = this.inputSystem.getMovementSpeed();
-    
+   
     // Apply input through client prediction for server sync
     if (inputState.sequence > 0) { // Only apply if we have a valid sequence
       // Add movement data to inputState for client prediction
@@ -720,14 +820,24 @@ export class GameScene extends Phaser.Scene {
     // Update render positions with smooth corrections
     this.clientPrediction.updateRenderPosition(delta / 1000);
     
-    // Change player color based on movement speed multiplier
-    if (speed === 0.5) {
-      this.player.setFillStyle(0x0000ff); // Blue for sneaking
-    } else if (speed === 1.5) {
-      this.player.setFillStyle(0xff0000); // Red for running
-    } else {
-      this.player.setFillStyle(0x00ff00); // Green for normal
-    }
+    // No more color changes for movement speed - using real sprite now
+  }
+
+  private createFloorBackground(): void {
+    // Create single large floor texture covering the entire game area
+    const floorBackground = this.assetManager.createFloorTile(
+      GAME_CONFIG.GAME_WIDTH / 2, 
+      GAME_CONFIG.GAME_HEIGHT / 2
+    );
+    floorBackground.setDepth(0); // Bottom layer
+    floorBackground.setOrigin(0.5, 0.5); // Center origin
+    
+    // Scale to cover entire game area
+    const scaleX = GAME_CONFIG.GAME_WIDTH / floorBackground.width;
+    const scaleY = GAME_CONFIG.GAME_HEIGHT / floorBackground.height;
+    floorBackground.setScale(scaleX, scaleY);
+    
+    this.floorSprites.push(floorBackground);
   }
 
   private createTestWalls(): void {
@@ -767,17 +877,39 @@ export class GameScene extends Phaser.Scene {
         inputText.setText([
           `Pos: ${this.playerPosition.x.toFixed(0)},${this.playerPosition.y.toFixed(0)} | Move: ${(speed * 100).toFixed(0)}%`,
           `Wpn: ${currentWeapon || 'None'} ${isADS ? 'ADS' : ''} | Gren: ${grenadeCharge}/5`,
-          `FX: F${effectCounts.muzzleFlashes} H${effectCounts.hitMarkers} P${effectCounts.particles}`
+          `FX: F${effectCounts.muzzleFlashes} E${effectCounts.explosions} H${effectCounts.hitMarkers} P${effectCounts.particles}`,
+          `Keys: F=Toggle Fog | O=Server Pos | V=Debug Vision`
         ].join('\n'));
       }
     });
 
-    // Toggle fog visibility for debugging - ONLY debug key kept
+    // Toggle fog visibility for debugging - toggles both layers
     this.input.keyboard!.on('keydown-F', () => {
       const fogLayer = (this.visionRenderer as any).fogLayer;
-      if (fogLayer) {
-        fogLayer.setVisible(!fogLayer.visible);
-        console.log(`🌫️ Fog layer toggled - visible: ${fogLayer.visible}, depth: ${fogLayer.depth}`);
+      const desatLayer = (this.visionRenderer as any).desaturationLayer;
+      if (fogLayer && desatLayer) {
+        const newVisibility = !fogLayer.visible;
+        fogLayer.setVisible(newVisibility);
+        desatLayer.setVisible(newVisibility);
+        console.log(`🌫️ Fog layers toggled - visible: ${newVisibility}`);
+      }
+    });
+
+    // Toggle server position indicator with 'O' key
+    this.input.keyboard!.on('keydown-O', () => {
+      this.showServerIndicator = !this.showServerIndicator;
+      const backendIndicator = (this as any).backendIndicator;
+      if (backendIndicator) {
+        backendIndicator.setVisible(this.showServerIndicator);
+        console.log(`🔴 Server position indicator: ${this.showServerIndicator ? 'visible' : 'hidden'}`);
+      }
+    });
+
+    // Test explosion animation - click to explode (for testing assets)
+    this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      if (pointer.rightButtonDown()) {
+        const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+        this.visualEffectsSystem.showExplosionEffect(worldPoint, 40);
       }
     });
     
@@ -879,6 +1011,13 @@ export class GameScene extends Phaser.Scene {
     if (this.playerManager) {
       this.playerManager.destroy();
     }
+    
+    // Clean up sprites
+    this.wallSliceSprites.forEach(sprite => sprite.destroy());
+    this.wallSliceSprites.clear();
+    
+    this.floorSprites.forEach(sprite => sprite.destroy());
+    this.floorSprites.length = 0;
   }
 
   private addCoordinateDebug(): void {
@@ -890,21 +1029,7 @@ export class GameScene extends Phaser.Scene {
     const bounds = this.add.rectangle(240, 135, 480, 270);
     bounds.setStrokeStyle(1, 0xffffff, 0.2);
     
-    // Draw grid lines every 50 pixels
-    const gridAlpha = 0.1;
-    const gridColor = 0x00ff00;
-    
-    // Vertical lines
-    for (let x = 0; x <= 480; x += 50) {
-      this.add.line(0, 0, x, 0, x, 270, gridColor, gridAlpha).setOrigin(0);
-    }
-    
-    // Horizontal lines
-    for (let y = 0; y <= 270; y += 50) {
-      this.add.line(0, 0, 0, y, 480, y, gridColor, gridAlpha).setOrigin(0);
-    }
-    
-    // Remove coordinate labels - too cluttered at this resolution
+    // Grid lines removed - no more green lines on the floor
     
     // Show mouse world position on move - top right corner
     const mouseText = this.add.text(GAME_CONFIG.GAME_WIDTH - 5, 15, '', { fontSize: '8px', color: '#ffff00' });
@@ -913,7 +1038,5 @@ export class GameScene extends Phaser.Scene {
       const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
       mouseText.setText(`Mouse: (${worldPoint.x.toFixed(0)}, ${worldPoint.y.toFixed(0)})`);
     });
-    
-    // Debug: Show player rotation - removed to reduce clutter
   }
 } 
