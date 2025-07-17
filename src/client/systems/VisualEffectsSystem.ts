@@ -8,12 +8,22 @@ interface BulletTrail {
   startAlpha: number;
 }
 
+interface MuzzleFlashData {
+  sprite: Phaser.GameObjects.Sprite;
+  playerId: string;
+  weaponType: string;
+  startTime: number;
+}
+
 interface Projectile {
   id: string;
   type: 'rocket' | 'grenade';
   position: { x: number; y: number };
   velocity: { x: number; y: number };
   trail: Phaser.GameObjects.Graphics;
+  sprite?: Phaser.GameObjects.Sprite | Phaser.GameObjects.Container; // Visual representation (for grenade)
+  rotation?: number; // Current rotation (for spinning)
+  spinSpeed?: number; // Rotation speed based on velocity
   startTime: number;
   lifetime: number;
   lastSmokeTime?: number; // Track when we last spawned smoke
@@ -29,7 +39,7 @@ interface PendingShot {
 export class VisualEffectsSystem implements IGameSystem {
   private scene: Phaser.Scene;
   private assetManager: AssetManager;
-  private muzzleFlashes: Phaser.GameObjects.Sprite[] = [];
+  private muzzleFlashes: MuzzleFlashData[] = [];
   private explosions: Phaser.GameObjects.Sprite[] = [];
   private hitMarkers: Phaser.GameObjects.Graphics[] = [];
   private particles: Phaser.GameObjects.Graphics[] = [];
@@ -52,8 +62,43 @@ export class VisualEffectsSystem implements IGameSystem {
     // Update muzzle flashes (they auto-destroy via tweens, so just clean up destroyed ones)
     for (let i = this.muzzleFlashes.length - 1; i >= 0; i--) {
       const flash = this.muzzleFlashes[i];
-      if (!flash.active) {
+      if (!flash.sprite.active) {
         this.muzzleFlashes.splice(i, 1);
+      } else {
+        // Update angle based on current player position and cursor
+        const gameScene = this.scene as any;
+        const localPlayerId = gameScene.networkSystem?.getSocket()?.id;
+        
+        // Only update angle for local player's muzzle flashes
+        if (flash.playerId === localPlayerId && gameScene.playerPosition && gameScene.inputSystem) {
+          // Get current mouse position from input system
+          const inputState = gameScene.inputSystem.getInputState();
+          
+          // Calculate new angle from player to cursor
+          const angle = Math.atan2(
+            inputState.mouse.y - gameScene.playerPosition.y,
+            inputState.mouse.x - gameScene.playerPosition.x
+          );
+          
+          // Update muzzle flash rotation
+          flash.sprite.setRotation(angle);
+          
+          // Also update position to follow player movement
+          const shoulderOffset = 8;
+          const shoulderAngle = angle + Math.PI / 2;
+          const shoulderX = gameScene.playerPosition.x + Math.cos(shoulderAngle) * shoulderOffset;
+          const shoulderY = gameScene.playerPosition.y + Math.sin(shoulderAngle) * shoulderOffset;
+          
+          const forwardOffset = 6;
+          const forwardX = Math.cos(angle) * forwardOffset;
+          const forwardY = Math.sin(angle) * forwardOffset;
+          
+          const weaponLength = 16;
+          const barrelX = shoulderX + forwardX + Math.cos(angle) * weaponLength;
+          const barrelY = shoulderY + forwardY + Math.sin(angle) * weaponLength;
+          
+          flash.sprite.setPosition(barrelX, barrelY);
+        }
       }
     }
 
@@ -79,7 +124,7 @@ export class VisualEffectsSystem implements IGameSystem {
   }
 
   destroy(): void {
-    this.muzzleFlashes.forEach(flash => flash.destroy());
+    this.muzzleFlashes.forEach(flash => flash.sprite.destroy()); // Destroy sprite
     this.muzzleFlashes = [];
     
     this.explosions.forEach(explosion => explosion.destroy());
@@ -94,7 +139,12 @@ export class VisualEffectsSystem implements IGameSystem {
     this.bulletTrails.forEach(trail => trail.line.destroy());
     this.bulletTrails = [];
     
-    this.projectiles.forEach(projectile => projectile.trail.destroy());
+    this.projectiles.forEach(projectile => {
+      projectile.trail.destroy();
+      if (projectile.sprite) {
+        projectile.sprite.destroy();
+      }
+    });
     this.projectiles.clear();
 
     this.pendingShots.clear();
@@ -106,72 +156,147 @@ export class VisualEffectsSystem implements IGameSystem {
   private setupBackendEventListeners(): void {
     // Listen for weapon events from backend
     this.scene.events.on('backend:weapon:fired', (data: any) => {
-      // For now, just show muzzle flash since backend doesn't send hit data properly
-      if (data.position) {
-        this.showMuzzleFlash(data.position, data.direction, data.weaponType || 'rifle');
+      // Show muzzle flash for OTHER players only to avoid doubles
+      const gameScene = this.scene as any;
+      const localPlayerId = gameScene.networkSystem?.getSocket()?.id;
+      
+      if (data.playerId && data.playerId !== localPlayerId) {
+        // This is another player firing - show their muzzle flash
+        this.showMuzzleFlash(data.position, data.direction, data.weaponType, data.playerId);
+        console.log(`📡 Showing muzzle flash for other player: ${data.playerId}`);
+      } else {
+        console.log(`📡 Backend weapon:fired event received for local player ${data.weaponType || 'unknown'} - skipping to avoid double`);
       }
     });
 
     this.scene.events.on('backend:weapon:hit', (data: any) => {
-
-      this.showHitMarker(data.position);
+      console.log(`🎯 Backend weapon hit at (${data.position?.x}, ${data.position?.y})`);
       
-      // Update trail to actual hit position if we have the data
-      if (data.startPosition && data.position) {
-        this.showBulletTrail(data.startPosition, data.position, data.weaponType);
+      if (data.position) {
+        this.showHitMarker(data.position);
+        
+        // Debug: log what we're looking for
+        console.log(`🔍 Looking for pending shot: playerId=${data.playerId}, weaponType=${data.weaponType}`);
+        console.log(`🔍 Current pending shots:`, Array.from(this.pendingShots.keys()));
+        
+        // Find the pending shot to get start position - try exact weapon type first
+        let pendingKey = `${data.playerId}_${data.weaponType}`;
+        let pendingShot = this.pendingShots.get(pendingKey);
+        
+        // Fallback: try without weapon type if backend didn't send it
+        if (!pendingShot && !data.weaponType) {
+          // Try all weapon types
+          const weaponTypes = ['rifle', 'pistol', 'rocket', 'grenade'];
+          for (const weapon of weaponTypes) {
+            pendingKey = `${data.playerId}_${weapon}`;
+            pendingShot = this.pendingShots.get(pendingKey);
+            if (pendingShot) {
+              console.log(`🔍 Found pending shot with fallback weapon type: ${weapon}`);
+              break;
+            }
+          }
+        }
+        
+        if (pendingShot) {
+          // Show trail from firing position to actual hit position
+          this.showBulletTrail(pendingShot.startPosition, data.position, pendingShot.weaponType || data.weaponType);
+          this.pendingShots.delete(pendingKey);
+          console.log(`🎯 Bullet trail: ${pendingShot.weaponType || data.weaponType} hit target`);
+        } else if (data.startPosition) {
+          // Fallback to provided start position
+          this.showBulletTrail(data.startPosition, data.position, data.weaponType || 'rifle');
+          console.log(`🎯 Bullet trail: using fallback start position for ${data.weaponType || 'rifle'}`);
+        }
       }
     });
 
     this.scene.events.on('backend:weapon:miss', (data: any) => {
-
+      console.log(`🎯 Backend weapon miss for player ${data.playerId} with weapon ${data.weaponType}`);
+      console.log(`🔍 Current pending shots:`, Array.from(this.pendingShots.keys()));
       
-      // Find the pending shot for this player
-      let pendingShot: PendingShot | undefined;
-      let pendingKey: string | undefined;
+      // Find the pending shot for this player - try exact weapon type first
+      let pendingKey = `${data.playerId}_${data.weaponType}`;
+      let pendingShot = this.pendingShots.get(pendingKey);
       
-      // Try to find a matching pending shot
-      for (const [key, shot] of this.pendingShots.entries()) {
-        if (key.startsWith(data.playerId)) {
-          pendingShot = shot;
-          pendingKey = key;
-          break;
+      // Fallback: try without weapon type if backend didn't send it
+      if (!pendingShot && !data.weaponType) {
+        // Try all weapon types
+        const weaponTypes = ['rifle', 'pistol', 'rocket', 'grenade'];
+        for (const weapon of weaponTypes) {
+          pendingKey = `${data.playerId}_${weapon}`;
+          pendingShot = this.pendingShots.get(pendingKey);
+          if (pendingShot) {
+            console.log(`🔍 Found pending shot with fallback weapon type: ${weapon}`);
+            break;
+          }
         }
       }
       
-      if (pendingShot && pendingKey) {
-        // Calculate hit point based on direction from backend
-        const maxRange = 500;
-        const hitX = pendingShot.startPosition.x + Math.cos(data.direction) * maxRange;
-        const hitY = pendingShot.startPosition.y + Math.sin(data.direction) * maxRange;
-        const hitPosition = { x: hitX, y: hitY };
+      if (pendingShot) {
+        let hitPosition: { x: number; y: number };
+        
+        if (data.position) {
+          // Use exact position provided by backend
+          hitPosition = data.position;
+        } else {
+          // Calculate hit point based on direction from backend
+          const maxRange = 500;
+          hitPosition = {
+            x: pendingShot.startPosition.x + Math.cos(data.direction) * maxRange,
+            y: pendingShot.startPosition.y + Math.sin(data.direction) * maxRange
+          };
+        }
         
         // Show the trail from start to calculated end
-        this.showBulletTrail(pendingShot.startPosition, hitPosition, pendingShot.weaponType);
+        this.showBulletTrail(pendingShot.startPosition, hitPosition, pendingShot.weaponType || data.weaponType || 'rifle');
         this.pendingShots.delete(pendingKey);
         
-        // Show impact effect at the calculated position
+        // Show impact effect at the hit position
         this.showImpactEffect(hitPosition, data.direction);
+        console.log(`🎯 Bullet trail: ${pendingShot.weaponType || data.weaponType} missed target`);
       } else if (data.position) {
         // Fallback: just show impact effect at the position provided
         this.showImpactEffect(data.position, data.direction);
+        console.log(`🎯 No pending shot found, showing impact effect only`);
       }
     });
 
     this.scene.events.on('backend:wall:damaged', (data: any) => {
-      if (data.wallId && data.position) {
-  
-      }
-      this.showWallDamageEffect(data.position, data.material || 'concrete');
-      this.showHitMarker(data.position);
+      console.log(`🎯 Backend wall damaged at (${data.position?.x}, ${data.position?.y}) by ${data.playerId}`);
       
-      // Show trail to actual wall hit position
-      if (data.playerId) {
-        const pendingKey = `${data.playerId}_${data.weaponType || 'rifle'}`;
-        const pendingShot = this.pendingShots.get(pendingKey);
+      if (data.position) {
+        this.showWallDamageEffect(data.position, data.material || 'concrete');
+        this.showHitMarker(data.position);
         
-        if (pendingShot && data.position) {
-          this.showBulletTrail(pendingShot.startPosition, data.position, pendingShot.weaponType);
-          this.pendingShots.delete(pendingKey);
+        // Show trail to actual wall hit position
+        if (data.playerId) {
+          console.log(`🔍 Looking for wall damage pending shot: playerId=${data.playerId}, weaponType=${data.weaponType}`);
+          
+          // Try exact weapon type first
+          let pendingKey = `${data.playerId}_${data.weaponType}`;
+          let pendingShot = this.pendingShots.get(pendingKey);
+          
+          // Fallback: try without weapon type if backend didn't send it
+          if (!pendingShot && !data.weaponType) {
+            // Try all weapon types
+            const weaponTypes = ['rifle', 'pistol', 'rocket', 'grenade'];
+            for (const weapon of weaponTypes) {
+              pendingKey = `${data.playerId}_${weapon}`;
+              pendingShot = this.pendingShots.get(pendingKey);
+              if (pendingShot) {
+                console.log(`🔍 Found pending shot with fallback weapon type: ${weapon}`);
+                break;
+              }
+            }
+          }
+          
+          if (pendingShot) {
+            this.showBulletTrail(pendingShot.startPosition, data.position, pendingShot.weaponType || data.weaponType || 'rifle');
+            this.pendingShots.delete(pendingKey);
+            console.log(`🎯 Bullet trail: ${pendingShot.weaponType || data.weaponType} hit wall ${data.wallId}`);
+          } else {
+            console.log(`🎯 No pending shot found for wall hit by ${data.playerId} with ${data.weaponType}`);
+          }
         }
       }
     });
@@ -218,10 +343,15 @@ export class VisualEffectsSystem implements IGameSystem {
           startPosition: { ...data.position },
           timestamp: data.timestamp
         });
+        
+        console.log(`📝 Stored pending shot: ${pendingKey} for ${data.weaponType}`);
 
         // Clean up old pending shots after 1 second
         this.scene.time.delayedCall(1000, () => {
-          this.pendingShots.delete(pendingKey);
+          if (this.pendingShots.has(pendingKey)) {
+            console.log(`🗑️ Cleaning up expired pending shot: ${pendingKey}`);
+            this.pendingShots.delete(pendingKey);
+          }
         });
       }
       
@@ -232,30 +362,13 @@ export class VisualEffectsSystem implements IGameSystem {
   
         
       } else {
-        // For hitscan weapons, show a temporary trail for immediate feedback
-        // This will be replaced/updated when backend responds
-        const tempHitPoint = this.calculateBulletHitPoint(data.position, data.targetPosition);
-        
-        // Create a temporary faded trail
-        const tempTrail = this.scene.add.graphics();
-        tempTrail.setDepth(39); // Slightly behind real trails
-        tempTrail.lineStyle(1, 0xFFFFFF, 0.3); // Faded white line
-        tempTrail.beginPath();
-        tempTrail.moveTo(data.position.x, data.position.y);
-        tempTrail.lineTo(tempHitPoint.x, tempHitPoint.y);
-        tempTrail.strokePath();
-        
-        // Fade out the temporary trail
-        this.scene.tweens.add({
-          targets: tempTrail,
-          alpha: 0,
-          duration: 500,
-          onComplete: () => {
-            tempTrail.destroy();
-          }
-        });
-        
-        
+        // For hitscan weapons (rifle, pistol), NO immediate trail - wait for backend response
+        // This provides accurate trails that include weapon inaccuracy and backend hit detection
+        if (data.weaponType === 'rifle' || data.weaponType === 'pistol') {
+          console.log(`🎯 Fired ${data.weaponType} - waiting for backend hit result`);
+        } else if (data.weaponType) {
+          console.log(`🎯 Fired unknown weapon type: ${data.weaponType}`);
+        }
       }
     });
   }
@@ -309,10 +422,19 @@ export class VisualEffectsSystem implements IGameSystem {
 
   // Public methods for creating effects
   
-  showMuzzleFlash(position: { x: number; y: number }, direction: number, weaponType: string = 'rifle'): void {
+  showMuzzleFlash(position: { x: number; y: number }, direction: number, weaponType: string = 'rifle', playerId?: string): void {
     const flash = this.assetManager.showMuzzleFlash(position.x, position.y, direction, weaponType);
     if (flash) {
-      this.muzzleFlashes.push(flash);
+      // Get player ID - use provided ID or default to local player
+      const gameScene = this.scene as any;
+      const actualPlayerId = playerId || gameScene.networkSystem?.getSocket()?.id || 'unknown';
+      
+      this.muzzleFlashes.push({
+        sprite: flash,
+        playerId: actualPlayerId,
+        weaponType: weaponType,
+        startTime: Date.now()
+      });
     }
   }
 
@@ -335,21 +457,27 @@ export class VisualEffectsSystem implements IGameSystem {
   }
 
   showImpactEffect(position: { x: number; y: number }, direction: number): void {
-    // Create impact sparks
-    for (let i = 0; i < 5; i++) {
-      const spark = this.scene.add.graphics();
-      spark.setDepth(55);
-      spark.fillStyle(0xFFD700); // Gold color
-      spark.fillRect(position.x - 0.5, position.y - 0.5, 1, 1);
-      
-      // Add slight random offset
-      spark.x += (Math.random() - 0.5) * 10;
-      spark.y += (Math.random() - 0.5) * 10;
-      
-      this.particles.push(spark);
-    }
+    // Only show subtle impact effect for missed shots
+    // No yellow particles - just a small puff of dust
+    const dust = this.scene.add.graphics();
+    dust.setDepth(35); // Behind most effects
+    dust.fillStyle(0x999999, 0.3); // Gray dust, low opacity
+    dust.fillCircle(position.x, position.y, 2);
     
-
+    // Fade out quickly
+    this.scene.tweens.add({
+      targets: dust,
+      alpha: 0,
+      scaleX: 1.5,
+      scaleY: 1.5,
+      duration: 200,
+      ease: 'Power2',
+      onComplete: () => {
+        dust.destroy();
+      }
+    });
+    
+    console.log(`💥 Impact effect created at (${position.x.toFixed(1)}, ${position.y.toFixed(1)})`);
   }
 
   showWallDamageEffect(position: { x: number; y: number }, material: string = 'concrete'): void {
@@ -436,12 +564,18 @@ export class VisualEffectsSystem implements IGameSystem {
   }
 
   private calculateBulletHitPoint(startPos: { x: number; y: number }, targetPos: { x: number; y: number }): { x: number; y: number } {
-    // Simple ray-casting collision detection with walls
+    // Enhanced ray-casting collision detection with walls
     // This is client-side prediction; backend will provide authoritative results
     
     // Get wall data from DestructionRenderer (via scene)
     const scene = this.scene as any;
     const wallsData = scene.destructionRenderer?.getWallsData(false) || [];
+    
+    // Debug: Log wall count
+    if (wallsData.length === 0) {
+      console.log('🎯 No walls found for collision detection, bullet goes to cursor');
+      return targetPos;
+    }
     
     // Calculate ray direction
     const dx = targetPos.x - startPos.x;
@@ -453,27 +587,43 @@ export class VisualEffectsSystem implements IGameSystem {
     const dirX = dx / distance;
     const dirY = dy / distance;
     
-    // Cast ray and check for wall intersections
-    const stepSize = 2; // Check every 2 pixels
+    // Use smaller step size for more precise collision detection
+    const stepSize = 0.5; // Check every 0.5 pixels for precision
     let currentX = startPos.x;
     let currentY = startPos.y;
     
-    for (let step = 0; step < distance; step += stepSize) {
+    // Also check the maximum range (500 pixels)
+    const maxRange = Math.min(distance, 500);
+    
+    for (let step = 0; step < maxRange; step += stepSize) {
       currentX += dirX * stepSize;
       currentY += dirY * stepSize;
       
       // Check collision with walls
       for (const wall of wallsData) {
         if (this.isPointInWall(currentX, currentY, wall)) {
-          // Hit a wall, log debug info
-
-          return { x: currentX, y: currentY };
+          // Hit a wall - find the exact edge for precision
+          const edgePoint = this.findWallEdge(startPos, { x: currentX, y: currentY }, wall);
+          console.log(`🎯 Bullet hit wall at (${edgePoint.x.toFixed(1)}, ${edgePoint.y.toFixed(1)}) - stopped before cursor`);
+          return edgePoint;
         }
+      }
+      
+      // Check if we're outside game bounds
+      if (currentX < 0 || currentX > 480 || currentY < 0 || currentY > 320) {
+        console.log(`🎯 Bullet hit game boundary at (${currentX.toFixed(1)}, ${currentY.toFixed(1)})`);
+        return { x: currentX, y: currentY };
       }
     }
     
-    // No collision, return target position
-    return targetPos;
+    // No collision found, bullet travels to maximum range or target
+    const finalPoint = distance > 500 ? {
+      x: startPos.x + dirX * 500,
+      y: startPos.y + dirY * 500
+    } : targetPos;
+    
+    console.log(`🎯 Bullet reached end point at (${finalPoint.x.toFixed(1)}, ${finalPoint.y.toFixed(1)}) - no collision`);
+    return finalPoint;
   }
 
   private isPointInWall(x: number, y: number, wall: any): boolean {
@@ -502,6 +652,34 @@ export class VisualEffectsSystem implements IGameSystem {
     return wall.destructionMask[sliceIndex] === 0; // 0 means not destroyed
   }
 
+  private findWallEdge(startPos: { x: number; y: number }, hitPos: { x: number; y: number }, wall: any): { x: number; y: number } {
+    // Binary search to find the exact edge where the bullet first hits the wall
+    let low = 0;
+    let high = 1;
+    const dx = hitPos.x - startPos.x;
+    const dy = hitPos.y - startPos.y;
+    
+    // Binary search for precise edge
+    for (let i = 0; i < 10; i++) { // 10 iterations gives us good precision
+      const mid = (low + high) / 2;
+      const testX = startPos.x + dx * mid;
+      const testY = startPos.y + dy * mid;
+      
+      if (this.isPointInWall(testX, testY, wall)) {
+        high = mid; // Hit point is earlier in the ray
+      } else {
+        low = mid; // Hit point is later in the ray
+      }
+    }
+    
+    // Return the point just before hitting the wall
+    const edgeRatio = (low + high) / 2;
+    return {
+      x: startPos.x + dx * edgeRatio,
+      y: startPos.y + dy * edgeRatio
+    };
+  }
+
   private isTargetDifferentFromMouse(hitPoint: { x: number; y: number }, mousePos: { x: number; y: number }): boolean {
     // Check if bullet hit something before reaching mouse position
     const distance = Math.sqrt(
@@ -521,31 +699,36 @@ export class VisualEffectsSystem implements IGameSystem {
     let color = 0xFFFFFF;
     let width = 1;
     let duration = 300; // milliseconds
+    let alpha = 1.0;
     
     switch (weaponType) {
       case 'rifle':
         color = 0xFFD700; // Gold
         width = 1;
         duration = 250;
+        alpha = 1.0;
         break;
       case 'pistol':
         color = 0xFFFFFF; // White
         width = 0.5;
         duration = 200;
+        alpha = 1.0;
         break;
       case 'grenade':
-        color = 0xFF4500; // Orange red
-        width = 2;
+        color = 0x808080; // Gray (matching projectile trail)
+        width = 1; // Thin line
         duration = 400;
+        alpha = 0.3; // Low opacity like projectile trail
         break;
       case 'rocket':
         color = 0xFF0000; // Red
         width = 3;
         duration = 500;
+        alpha = 1.0;
         break;
     }
     
-    trail.lineStyle(width, color, 1);
+    trail.lineStyle(width, color, alpha);
     trail.beginPath();
     trail.moveTo(startPos.x, startPos.y);
     trail.lineTo(endPos.x, endPos.y);
@@ -575,7 +758,7 @@ export class VisualEffectsSystem implements IGameSystem {
 
   clearAllEffects(): void {
     // Clear muzzle flashes
-    this.muzzleFlashes.forEach(flash => flash.destroy());
+    this.muzzleFlashes.forEach(flash => flash.sprite.destroy()); // Destroy sprite
     this.muzzleFlashes = [];
     
     // Clear explosions
@@ -595,7 +778,12 @@ export class VisualEffectsSystem implements IGameSystem {
     this.bulletTrails = [];
     
     // Clear projectiles
-    this.projectiles.forEach(projectile => projectile.trail.destroy());
+    this.projectiles.forEach(projectile => {
+      projectile.trail.destroy();
+      if (projectile.sprite) {
+        projectile.sprite.destroy();
+      }
+    });
     this.projectiles.clear();
 
     this.pendingShots.clear();
@@ -613,9 +801,28 @@ export class VisualEffectsSystem implements IGameSystem {
     };
     
     projectile.trail.setDepth(40);
-    this.projectiles.set(projectile.id, projectile);
     
-
+    // Create visual sprite for grenade
+    if (projectile.type === 'grenade') {
+      // Create the grenade sprite
+      const grenadeSprite = this.scene.add.sprite(data.position.x, data.position.y, 'fraggrenade');
+      grenadeSprite.setDepth(45); // Above trails but below UI
+      grenadeSprite.setScale(0.8); // Scale down slightly for game size
+      grenadeSprite.setOrigin(0.5, 0.5); // Center origin for rotation
+      
+      projectile.sprite = grenadeSprite;
+      projectile.rotation = 0;
+      
+      // Calculate spin speed based on velocity magnitude
+      const speed = Math.sqrt(projectile.velocity.x * projectile.velocity.x + 
+                            projectile.velocity.y * projectile.velocity.y);
+      // Spin faster when thrown harder, but cap it
+      projectile.spinSpeed = Math.min(speed * 0.02, 10); // Radians per update
+      
+      console.log(`💣 Created grenade projectile ${data.id} with spin speed ${projectile.spinSpeed.toFixed(2)}`);
+    }
+    
+    this.projectiles.set(projectile.id, projectile);
   }
 
   private updateProjectilePosition(id: string, position: { x: number; y: number }): void {
@@ -624,6 +831,22 @@ export class VisualEffectsSystem implements IGameSystem {
       const oldPos = { ...projectile.position };
       projectile.position = { ...position };
       
+      // Update sprite position and rotation for grenades
+      if (projectile.sprite && projectile.type === 'grenade') {
+        projectile.sprite.setPosition(position.x, position.y);
+        
+        // Update rotation with slowing spin over time
+        if (projectile.rotation !== undefined && projectile.spinSpeed !== undefined) {
+          const elapsed = (Date.now() - projectile.startTime) / 1000; // seconds
+          // Slow down spin over time (air resistance)
+          const dampingFactor = Math.max(0.1, 1 - elapsed * 0.3); // Reduce by 30% per second, min 10%
+          const currentSpinSpeed = projectile.spinSpeed * dampingFactor;
+          
+          projectile.rotation += currentSpinSpeed;
+          projectile.sprite.setRotation(projectile.rotation);
+        }
+      }
+      
       // Draw trail segment from old position to new position
       this.drawProjectileTrailSegment(projectile, oldPos, position);
     }
@@ -631,60 +854,59 @@ export class VisualEffectsSystem implements IGameSystem {
 
   private drawProjectileTrailSegment(projectile: Projectile, fromPos: { x: number; y: number }, toPos: { x: number; y: number }): void {
     // Different trail styles for different projectile types
-    let color = 0xFFFFFF;
-    let width = 2;
-    
-    switch (projectile.type) {
-      case 'rocket':
-        color = 0xFF0000; // Red trail with smoke
-        width = 3;
-        break;
-      case 'grenade':
-        color = 0xFF4500; // Orange trail
-        width = 2;
-        break;
-    }
-    
-    // Draw the trail segment
-    projectile.trail.lineStyle(width, color, 0.8);
-    projectile.trail.beginPath();
-    projectile.trail.moveTo(fromPos.x, fromPos.y);
-    projectile.trail.lineTo(toPos.x, toPos.y);
-    projectile.trail.strokePath();
-    
-    // Add smoke particles for rockets (throttled)
     if (projectile.type === 'rocket') {
+      // For rockets, primarily use smoke particles, no harsh line
       const now = Date.now();
-      if (!projectile.lastSmokeTime || now - projectile.lastSmokeTime > 50) { // Every 50ms
-        this.addRocketSmokeParticle(toPos);
+      if (!projectile.lastSmokeTime || now - projectile.lastSmokeTime > 25) { // More frequent smoke
+        // Add multiple smoke particles for denser trail
+        for (let i = 0; i < 2; i++) {
+          this.addRocketSmokeParticle(toPos);
+        }
         projectile.lastSmokeTime = now;
       }
+      
+      // Very faint connecting line
+      projectile.trail.lineStyle(1, 0xCCCCCC, 0.1); // Thin light gray line with very low opacity
+      projectile.trail.beginPath();
+      projectile.trail.moveTo(fromPos.x, fromPos.y);
+      projectile.trail.lineTo(toPos.x, toPos.y);
+      projectile.trail.strokePath();
+    } else if (projectile.type === 'grenade') {
+      // Grenade trail - thin gray line
+      projectile.trail.lineStyle(1, 0x808080, 0.3);
+      projectile.trail.beginPath();
+      projectile.trail.moveTo(fromPos.x, fromPos.y);
+      projectile.trail.lineTo(toPos.x, toPos.y);
+      projectile.trail.strokePath();
     }
   }
 
   private addRocketSmokeParticle(position: { x: number; y: number }): void {
     const smoke = this.scene.add.graphics();
     smoke.setDepth(35); // Behind the trail
-    smoke.fillStyle(0x808080, 0.4); // Gray smoke, more transparent
-    smoke.fillCircle(0, 0, 1.5); // Smaller smoke particle
+    
+    // Create a larger, more visible smoke puff
+    const size = 2 + Math.random() * 2; // Variable size smoke particles
+    smoke.fillStyle(0x999999, 0.6); // Lighter gray, more opaque initially
+    smoke.fillCircle(0, 0, size);
     
     // Set initial position with small random offset
-    smoke.x = position.x + (Math.random() - 0.5) * 2;
-    smoke.y = position.y + (Math.random() - 0.5) * 2;
+    smoke.x = position.x + (Math.random() - 0.5) * 3;
+    smoke.y = position.y + (Math.random() - 0.5) * 3;
     
     // Add some random drift motion
-    const driftX = (Math.random() - 0.5) * 20;
-    const driftY = Math.random() * 10 + 5; // Mostly downward drift
+    const driftX = (Math.random() - 0.5) * 15;
+    const driftY = (Math.random() - 0.5) * 10; // Random drift in all directions
     
     // Fade out, expand, and drift the smoke
     this.scene.tweens.add({
       targets: smoke,
       alpha: 0,
-      scaleX: 3,
-      scaleY: 3,
+      scaleX: 4,
+      scaleY: 4,
       x: smoke.x + driftX,
       y: smoke.y + driftY,
-      duration: 1000,
+      duration: 800,
       ease: 'Power2',
       onComplete: () => {
         smoke.destroy();
@@ -695,6 +917,11 @@ export class VisualEffectsSystem implements IGameSystem {
   private handleProjectileExplosion(id: string, position: { x: number; y: number }, radius: number): void {
     const projectile = this.projectiles.get(id);
     if (projectile) {
+      // Destroy grenade sprite if it exists
+      if (projectile.sprite) {
+        projectile.sprite.destroy();
+      }
+      
       // Fade out the trail
       this.scene.tweens.add({
         targets: projectile.trail,
@@ -710,7 +937,7 @@ export class VisualEffectsSystem implements IGameSystem {
       const explosionRadius = projectile.type === 'rocket' ? radius || 50 : radius || 40;
       this.showExplosionEffect(position, explosionRadius);
       
-      
+      console.log(`💥 ${projectile.type} exploded at (${position.x.toFixed(1)}, ${position.y.toFixed(1)})`);
     }
   }
 
@@ -723,6 +950,9 @@ export class VisualEffectsSystem implements IGameSystem {
       // Check if projectile has expired
       if (elapsed >= projectile.lifetime) {
         // Projectile timed out - remove it
+        if (projectile.sprite) {
+          projectile.sprite.destroy();
+        }
         this.scene.tweens.add({
           targets: projectile.trail,
           alpha: 0,

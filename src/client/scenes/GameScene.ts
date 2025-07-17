@@ -10,6 +10,9 @@ import { GAME_CONFIG } from '../../../shared/constants/index';
 import { GameState, CollisionEvent, Vector2, PolygonVision } from '../../../shared/types/index';
 
 import { AssetManager } from '../utils/AssetManager';
+import { audioManager } from '../systems/AudioManager';
+import { initializeGameAudio, fireWeapon, playUIClick } from '../systems/AudioIntegration';
+import { audioTest } from '../systems/AudioTest';
 
 export class GameScene extends Phaser.Scene {
   private inputSystem!: InputSystem;
@@ -69,6 +72,9 @@ export class GameScene extends Phaser.Scene {
     
     // Connect WeaponUI to InputSystem for auto-reload functionality
     this.inputSystem.setWeaponUI(this.weaponUI);
+    
+    // Initialize audio system
+    this.initializeAudio();
     
     // Create player sprite using actual sprite assets
     this.playerSprite = this.assetManager.createPlayer(
@@ -140,9 +146,6 @@ export class GameScene extends Phaser.Scene {
 
     // Create UI elements using Phaser
     this.createPhaserUI();
-
-    // Create test walls
-    this.createTestWalls();
 
     // Set up network event listeners
     this.setupNetworkListeners();
@@ -395,19 +398,22 @@ export class GameScene extends Phaser.Scene {
           sliceWidth = wall.width;
           sliceHeight = 2;
           sliceX = wall.position.x + sliceWidth / 2;
-          sliceY = wall.position.y + (i * sliceHeight) + sliceHeight / 2;
+          // For 10x20 sprites with bottom origin, position at bottom of slice
+          sliceY = wall.position.y + (i * sliceHeight) + sliceHeight;
         } else if (wall.orientation === 'horizontal') {
           // Horizontal wall: vertical slices (divide width by 5)
           sliceWidth = wall.width / 5;
           sliceHeight = wall.height;
           sliceX = wall.position.x + (i * sliceWidth) + sliceWidth / 2;
-          sliceY = wall.position.y + sliceHeight / 2;
+          // For 10x20 sprites with bottom origin, position at bottom of slice
+          sliceY = wall.position.y + sliceHeight;
         } else {
           // Vertical wall: horizontal slices (divide height by 5)
           sliceWidth = wall.width;
           sliceHeight = wall.height / 5;
           sliceX = wall.position.x + sliceWidth / 2;
-          sliceY = wall.position.y + (i * sliceHeight) + sliceHeight / 2;
+          // For 10x20 sprites with bottom origin, position at bottom of slice
+          sliceY = wall.position.y + (i * sliceHeight) + sliceHeight;
         }
         
         // Create or update wall slice sprite - back to simple createWall
@@ -860,12 +866,6 @@ export class GameScene extends Phaser.Scene {
     this.floorSprites.push(floorBackground);
   }
 
-  private createTestWalls(): void {
-    // NOTE: Test walls are now disabled - backend should be the only source
-    
-    // this.destructionRenderer.addTestWalls();
-  }
-
   private createUI(): void {
     // Create input state display for debugging - moved to bottom left
     const inputText = this.add.text(5, GAME_CONFIG.GAME_HEIGHT - 5, '', {
@@ -1058,5 +1058,69 @@ export class GameScene extends Phaser.Scene {
       const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
       mouseText.setText(`Mouse: (${worldPoint.x.toFixed(0)}, ${worldPoint.y.toFixed(0)})`);
     });
+  }
+
+  /**
+   * Initialize the audio system for the game
+   */
+  private async initializeAudio(): Promise<void> {
+    try {
+      console.log('Initializing game audio...');
+      
+      // Initialize the test audio system first (works without files)
+      await audioTest.initialize();
+      
+             // Make both systems available globally for testing
+       (window as any).audioTest = audioTest;
+       (window as any).audioManager = audioManager;
+       
+       // Add easy test functions
+       (window as any).testGameAudio = () => {
+         console.log('🎮 Testing game audio...');
+         setTimeout(() => audioTest.playTestSound('click'), 100);
+         setTimeout(() => audioTest.playTestSound('shoot'), 600);
+         setTimeout(() => audioTest.playTestSound('explosion'), 1100);
+         setTimeout(() => audioTest.playTestSound('beep'), 1600);
+       };
+       
+       // Add weapon test function
+       (window as any).testWeapons = () => {
+         console.log('🔫 Testing weapon integration...');
+         setTimeout(() => {
+           console.log('Testing pistol...');
+           fireWeapon('pistol');
+         }, 100);
+         setTimeout(() => {
+           console.log('Testing rifle...');
+           fireWeapon('rifle');
+         }, 1000);
+         setTimeout(() => {
+           console.log('Testing rocket launcher...');
+           fireWeapon('rocketlauncher');
+         }, 2000);
+         setTimeout(() => {
+           console.log('Testing UI click...');
+           playUIClick();
+         }, 3000);
+       };
+       
+       console.log('✅ Audio test system ready!');
+       console.log('🎵 Try these commands in console:');
+       console.log('   testGameAudio()    // Test basic sounds');
+       console.log('   testWeapons()      // Test weapon integration');
+       console.log('   audioTest.playTestSound("shoot")');
+       
+       // Initialize real audio manager but skip file loading
+       try {
+         await audioManager.initialize();
+         await audioManager.loadAllSounds();
+         console.log('✅ Audio manager ready (synthetic sounds only)');
+       } catch (fileError) {
+         console.log('ℹ️  Audio manager failed to initialize');
+       }
+      
+    } catch (error) {
+      console.error('❌ Failed to initialize audio:', error);
+    }
   }
 } 

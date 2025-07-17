@@ -402,9 +402,16 @@ export class DestructionRenderer implements IGameSystem {
       
       if (!this.walls.has(wallId)) {
         // Create new wall
+        
+        // Snap wall position to 10-pixel grid for proper alignment
+        const alignedPosition = {
+          x: Math.round(data.position.x / 10) * 10,
+          y: Math.round(data.position.y / 10) * 10
+        };
+        
         const wall: Wall = {
           id: wallId,
-          position: data.position,
+          position: alignedPosition,
           width: data.width,
           height: data.height,
           orientation: data.orientation || (data.width > data.height ? 'horizontal' : 'vertical'),
@@ -451,9 +458,15 @@ export class DestructionRenderer implements IGameSystem {
       destructionMask = [0, 0, 0, 0, 0];
     }
     
+    // Snap wall position to 10-pixel grid for proper alignment
+    const alignedPosition = {
+      x: Math.round(wallData.position.x / 10) * 10,
+      y: Math.round(wallData.position.y / 10) * 10
+    };
+    
     const wall: Wall = {
       id: wallData.id,
-      position: wallData.position,
+      position: alignedPosition,
       width: wallData.width,
       height: wallData.height,
       orientation: wallData.orientation || (wallData.width > wallData.height ? 'horizontal' : 'vertical'),
@@ -507,65 +520,17 @@ export class DestructionRenderer implements IGameSystem {
     });
   }
 
-  addTestWalls(): void {
-    // Add test walls for development (using backend wall IDs with underscores)
-    const testWalls = [
-      // Horizontal walls
-      {
-        id: 'wall_1',
-        position: { x: 200, y: 100 },
-        width: 60,
-        height: 15,
-        material: 'concrete',
-        maxHealth: 150
-      },
-      {
-        id: 'wall_3',
-        position: { x: 300, y: 150 },
-        width: 60,
-        height: 15,
-        material: 'metal',
-        maxHealth: 200
-      },
-      // Vertical walls
-      {
-        id: 'wall_2',
-        position: { x: 100, y: 140 },
-        width: 15,
-        height: 60,
-        material: 'wood',
-        maxHealth: 80
-      },
-      {
-        id: 'wall_4',
-        position: { x: 400, y: 50 },
-        width: 15,
-        height: 60,
-        material: 'glass',
-        maxHealth: 30
-      },
-      {
-        id: 'wall_5',
-        position: { x: 250, y: 180 },
-        width: 15,
-        height: 60,
-        material: 'concrete',
-        maxHealth: 150
-      }
-    ];
-
-    testWalls.forEach(wallData => {
-      const wall: Wall = {
-        ...wallData,
-        orientation: wallData.width > wallData.height ? 'horizontal' : 'vertical',
-        sliceHealth: [wallData.maxHealth, wallData.maxHealth, wallData.maxHealth, wallData.maxHealth, wallData.maxHealth],
-        destructionMask: [0, 0, 0, 0, 0],
-        needsUpdate: true
-      };
-      this.walls.set(wall.id, wall);
-    });
+  private shouldRenderBoundaryWall(wall: Wall): boolean {
+    // Check if this is a boundary wall that should be hidden
+    // Boundary walls are thin walls at the edges of the play area
+    const isTopBoundary = wall.position.y <= -10 && wall.height <= 10;
+    const isBottomBoundary = wall.position.y >= 270 && wall.height <= 10;
+    const isLeftBoundary = wall.position.x <= -10 && wall.width <= 10;
+    const isRightBoundary = wall.position.x >= 480 && wall.width <= 10;
+    
+    return !(isTopBoundary || isBottomBoundary || isLeftBoundary || isRightBoundary);
   }
-
+  
   simulateWallDamage(wallId: string, damage: number = 20): void {
     const wall = this.walls.get(wallId);
     if (!wall) return;

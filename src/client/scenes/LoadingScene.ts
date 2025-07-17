@@ -52,6 +52,9 @@ export class LoadingScene extends Phaser.Scene {
     this.load.image('weapon_rifle', 'src/assets/rifle.png');
     this.load.image('weapon_pistol', 'src/assets/pistol.png');
     this.load.image('weapon_rocket', 'src/assets/rocketlauncher.png');
+    
+    // Projectile sprites
+    this.load.image('fraggrenade', 'src/assets/fraggrenade.png');
   }
 
   private loadEffectAssets(): void {

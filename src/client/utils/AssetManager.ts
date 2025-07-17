@@ -7,7 +7,7 @@ export class AssetManager {
     PLAYER: 1.25,        // Scale players appropriately 
     MUZZLE_FLASH: 0.8,   // Scale down muzzle flash
     EXPLOSION: 1.5,      // Scale up explosion for impact
-    WALL: 1.0,           // 10x10 → 10x10 (no scaling, keep original size)
+    WALL: 1.0,           // 10x20 → 10x20 (no scaling, sprites overhang above tiles)
     FLOOR: 0.1,          // Scale down floor texture (adjusted for better tiling)
     WEAPON_UI: 0.6,      // Scale weapons for UI display
     WEAPON_HELD: 0.8     // Scale weapons when held by players
@@ -68,7 +68,11 @@ export class AssetManager {
     }
     
     const sprite = this.scene.add.sprite(x, y, textureKey);
-    sprite.setScale(this.SCALES.WALL); // 10x10 → 10x10 (no scaling)
+    sprite.setScale(this.SCALES.WALL); // 10x20 → 10x20 (no scaling)
+    
+    // Set origin to bottom-center so 10x20 sprite aligns bottom with tile bottom
+    // This makes the sprite overhang ABOVE the 10x10 tile, not below
+    sprite.setOrigin(0.5, 1.0);
     
     return sprite;
   }
