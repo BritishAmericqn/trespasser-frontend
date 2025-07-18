@@ -1,5 +1,6 @@
 import { IGameSystem } from '../../../shared/interfaces/IGameSystem';
 import { EVENTS } from '../../../shared/constants/index';
+import { PlayerLoadout } from '../../../shared/constants/weapons';
 
 export interface InputState {
   keys: {
@@ -42,8 +43,9 @@ export class InputSystem implements IGameSystem {
   private lastInputState: InputState | null = null;
   
   // Weapon-related properties
-  private weaponSlots: (string | null)[] = [null, 'rifle', 'pistol', 'grenade', 'rocket'];
+  private weaponSlots: (string | null)[] = [null, null, null, null]; // Will be filled from loadout
   private currentWeapon: number = 1;
+  private playerLoadout: PlayerLoadout | null = null;
   private isADS: boolean = false;
   private grenadeChargeStart: number = 0;
   private grenadeChargeLevel: number = 0;
@@ -99,6 +101,49 @@ export class InputSystem implements IGameSystem {
       sequence: 0,
       timestamp: 0
     };
+  }
+
+  // Set the player's configured loadout (called from GameScene)
+  setLoadout(loadout: PlayerLoadout): void {
+    this.playerLoadout = loadout;
+    
+    // Build weapon slots from loadout configuration
+    this.weaponSlots = [null]; // Slot 0 is always null
+    
+    // Add primary weapon (slot 1)
+    this.weaponSlots[1] = loadout.primary;
+    
+    // Add secondary weapon (slot 2)
+    this.weaponSlots[2] = loadout.secondary;
+    
+    // Add support weapons (slots 3+)
+    let slotIndex = 3;
+    for (const supportWeapon of loadout.support) {
+      if (slotIndex <= 4) { // Max 4 weapon slots in current UI
+        this.weaponSlots[slotIndex] = supportWeapon;
+        slotIndex++;
+      }
+    }
+    
+    // Fill remaining slots with null
+    while (slotIndex <= 4) {
+      this.weaponSlots[slotIndex] = null;
+      slotIndex++;
+    }
+    
+    // Set initial weapon to first available slot
+    this.currentWeapon = 1;
+    while (this.currentWeapon <= 4 && !this.weaponSlots[this.currentWeapon]) {
+      this.currentWeapon++;
+    }
+    
+    // If no weapons configured, default to slot 1
+    if (this.currentWeapon > 4) {
+      this.currentWeapon = 1;
+    }
+    
+    console.log('InputSystem: Configured weapon slots:', this.weaponSlots);
+    console.log('InputSystem: Starting with weapon slot:', this.currentWeapon);
   }
 
   initialize(): void {
@@ -558,6 +603,10 @@ export class InputSystem implements IGameSystem {
   
   getCurrentWeapon(): string | null {
     return this.weaponSlots[this.currentWeapon];
+  }
+
+  getPlayerLoadout(): PlayerLoadout | null {
+    return this.playerLoadout;
   }
 
   getGrenadeChargeLevel(): number {

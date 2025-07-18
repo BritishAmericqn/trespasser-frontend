@@ -1,11 +1,13 @@
 import { InputSystem } from '../systems/InputSystem';
 import { NetworkSystem } from '../systems/NetworkSystem';
+import NetworkSystemSingleton from '../systems/NetworkSystemSingleton';
 import { VisualEffectsSystem } from '../systems/VisualEffectsSystem';
 import { DestructionRenderer } from '../systems/DestructionRenderer';
 import { WeaponUI } from '../ui/WeaponUI';
 import { ClientPrediction } from '../systems/ClientPrediction';
 import { VisionRenderer } from '../systems/VisionRenderer';
 import { PlayerManager } from '../systems/PlayerManager';
+import { ScreenShakeSystem } from '../systems/ScreenShakeSystem';
 import { GAME_CONFIG } from '../../../shared/constants/index';
 import { GameState, CollisionEvent, Vector2, PolygonVision } from '../../../shared/types/index';
 
@@ -23,6 +25,7 @@ export class GameScene extends Phaser.Scene {
   private clientPrediction!: ClientPrediction;
   private visionRenderer!: VisionRenderer;
   private playerManager!: PlayerManager;
+  private screenShakeSystem!: ScreenShakeSystem;
   private assetManager!: AssetManager;
   private playerSprite!: Phaser.GameObjects.Sprite; // Changed from Rectangle to Sprite
   private playerWeapon!: Phaser.GameObjects.Sprite; // Add weapon sprite
@@ -50,6 +53,21 @@ export class GameScene extends Phaser.Scene {
     this.playerPosition = { x: 240, y: 135 }; // Center of 480x270
   }
 
+  init(data: any): void {
+    // NetworkSystem singleton will be retrieved in create()
+    console.log('GameScene: Initializing');
+    
+    // Get configured loadout from registry
+    const playerLoadout = this.registry.get('playerLoadout');
+    if (!playerLoadout) {
+      console.error('GameScene: No player loadout configured! Returning to ConfigureScene.');
+      this.scene.start('ConfigureScene');
+      return;
+    }
+    
+    console.log('GameScene: Using configured loadout:', playerLoadout);
+  }
+
   create(): void {
     // Initialize AssetManager first
     this.assetManager = new AssetManager(this);
@@ -57,15 +75,27 @@ export class GameScene extends Phaser.Scene {
     // Create floor background using actual floor texture
     this.createFloorBackground();
 
+    // Get configured loadout for weapon system
+    const playerLoadout = this.registry.get('playerLoadout');
+    
     // Initialize systems first (before using them)
     this.inputSystem = new InputSystem(this);
-    this.networkSystem = new NetworkSystem(this);
+    
+    // Configure InputSystem with player's weapon loadout
+    if (playerLoadout) {
+      this.inputSystem.setLoadout(playerLoadout);
+    }
+    
+    // Get NetworkSystem singleton (will update scene reference)
+    this.networkSystem = NetworkSystemSingleton.getInstance(this);
+    
     this.visualEffectsSystem = new VisualEffectsSystem(this);
     this.destructionRenderer = new DestructionRenderer(this);
     this.weaponUI = new WeaponUI(this);
-    this.clientPrediction = new ClientPrediction();
+    this.clientPrediction = new ClientPrediction(this);
     this.visionRenderer = new VisionRenderer(this);
     this.playerManager = new PlayerManager(this);
+    this.screenShakeSystem = new ScreenShakeSystem(this);
     
     // Connect VisionRenderer to PlayerManager for partial visibility
     this.playerManager.setVisionRenderer(this.visionRenderer);
@@ -76,20 +106,22 @@ export class GameScene extends Phaser.Scene {
     // Initialize audio system
     this.initializeAudio();
     
-    // Create player sprite using actual sprite assets
+    // Create player sprite using configured team
+    const teamColor = playerLoadout?.team || 'blue'; // Fallback to blue if no team configured
     this.playerSprite = this.assetManager.createPlayer(
       this.playerPosition.x,
       this.playerPosition.y,
-      'blue' // Default team, will be updated from backend
+      teamColor
     );
     this.playerSprite.setDepth(21); // Above other players
     this.playerSprite.setRotation(Math.PI / 2); // Start with 90-degree clockwise rotation
     
-    // Create weapon sprite for local player
+    // Create weapon sprite for local player using configured primary weapon
+    const initialWeapon = playerLoadout?.primary || 'smg'; // Fallback to SMG if no primary configured
     this.playerWeapon = this.assetManager.createWeapon(
       this.playerPosition.x,
       this.playerPosition.y,
-      'rifle', // Default weapon
+      initialWeapon,
       0 // Initial facing angle
     );
     this.playerWeapon.setDepth(20); // Just below player
@@ -117,11 +149,21 @@ export class GameScene extends Phaser.Scene {
       color: '#ffffff'
     }).setOrigin(1, 0);
 
+    // Check current connection state if NetworkSystem was passed from MenuScene
+    if (this.networkSystem && this.networkSystem.isAuthenticated()) {
+      this.connectionStatus.setText('Connected to server');
+      this.connectionStatus.setColor('#00ff00');
+      console.log('GameScene: Already authenticated via MenuScene');
+    } else if (this.networkSystem) {
+      console.log(`GameScene: NetworkSystem state = ${this.networkSystem.getConnectionState()}`);
+    }
+
+    // Initialize input system only if we have a valid network connection
     this.inputSystem.initialize();
-    this.networkSystem.initialize();
     this.visualEffectsSystem.initialize();
     this.destructionRenderer.initialize();
     this.weaponUI.initialize();
+    this.screenShakeSystem.initialize();
     
     // Set up client prediction callback
     this.clientPrediction.setPositionCallback((pos) => {
@@ -218,6 +260,7 @@ export class GameScene extends Phaser.Scene {
     this.visualEffectsSystem.update(delta);
     this.destructionRenderer.update(delta);
     this.weaponUI.update(delta);
+    this.screenShakeSystem.update(delta);
 
     // Update UI elements
     this.updatePhaserUI();
@@ -510,6 +553,13 @@ export class GameScene extends Phaser.Scene {
     this.events.on('network:connectionFailed', () => {
       this.connectionStatus.setText('Connection failed');
       this.connectionStatus.setColor('#ff0000');
+    });
+
+    // Game ready event (when authenticated and ready to play)
+    this.events.on('network:gameReady', () => {
+      this.connectionStatus.setText('Connected to server');
+      this.connectionStatus.setColor('#00ff00');
+      console.log('GameScene: Game ready event received');
     });
 
     // Game state updates from server
@@ -898,7 +948,7 @@ export class GameScene extends Phaser.Scene {
           `Pos: ${this.playerPosition.x.toFixed(0)},${this.playerPosition.y.toFixed(0)} | Move: ${(speed * 100).toFixed(0)}%`,
           `Wpn: ${currentWeapon || 'None'} ${isADS ? 'ADS' : ''} | Gren: ${grenadeCharge}/5`,
           `FX: F${effectCounts.muzzleFlashes} E${effectCounts.explosions} H${effectCounts.hitMarkers} P${effectCounts.particles}`,
-          `Keys: F=Toggle Fog | O=Server Pos | V=Debug Vision`
+          `Keys: F=Toggle Fog | O=Server Pos | V=Debug Vision | C=Collision Debug | K=Screen Shake | T=Test Shake`
         ].join('\n'));
       }
     });
@@ -923,6 +973,18 @@ export class GameScene extends Phaser.Scene {
         backendIndicator.setVisible(this.showServerIndicator);
         console.log(`🔴 Server position indicator: ${this.showServerIndicator ? 'visible' : 'hidden'}`);
       }
+    });
+
+    // Toggle screen shake with 'K' key (for configuring)
+    this.input.keyboard!.on('keydown-K', () => {
+      const isEnabled = this.screenShakeSystem.toggleEnabled();
+      console.log(`📳 Screen shake toggled: ${isEnabled ? 'ON' : 'OFF'}`);
+    });
+
+    // Test screen shake with 'T' key
+    this.input.keyboard!.on('keydown-T', () => {
+      console.log('📳 Testing screen shake...');
+      this.screenShakeSystem.customShake(200, 0.01, 'test');
     });
 
     // Test explosion animation - click to explode (for testing assets)
@@ -984,8 +1046,38 @@ export class GameScene extends Phaser.Scene {
       }
     });
 
-
-
+    // Debug collision system - Press C key
+    this.input.keyboard!.on('keydown-C', () => {
+      console.log('🎯 COLLISION DEBUG');
+      console.log('==================');
+      
+      const currentPos = this.playerPosition;
+      const collisionDebug = this.clientPrediction.getDebugInfo().collisionDebug;
+      
+      console.log(`Player position: (${currentPos.x.toFixed(1)}, ${currentPos.y.toFixed(1)})`);
+      console.log(`Has collision: ${collisionDebug.hasCollision}`);
+      
+      if (collisionDebug.hasCollision) {
+        console.log(`Colliding walls:`);
+        collisionDebug.collisions.forEach((collision: any) => {
+          console.log(`  - ${collision.wallId}: ${collision.position.x},${collision.position.y} (${collision.size.width}x${collision.size.height}) ${collision.orientation} [${collision.destructionMask}]`);
+        });
+      } else {
+        console.log('No wall collisions at current position');
+      }
+      
+      // Test movement in all directions
+      const testDistance = 10;
+      const directions = [
+        { name: 'North', dx: 0, dy: -testDistance },
+        { name: 'South', dx: 0, dy: testDistance },
+        { name: 'East', dx: testDistance, dy: 0 },
+        { name: 'West', dx: -testDistance, dy: 0 }
+      ];
+      
+             console.log('\nMovement test results will show when you try to move in each direction');
+       console.log('Watch the console as you move with WASD keys to see collision detection in action');
+    });
 
   }
 
@@ -1013,9 +1105,11 @@ export class GameScene extends Phaser.Scene {
     if (this.inputSystem) {
       this.inputSystem.destroy();
     }
-    if (this.networkSystem) {
-      this.networkSystem.destroy();
-    }
+    
+    // DO NOT destroy NetworkSystem - it's a singleton that should persist!
+    // The NetworkSystemSingleton manages its lifecycle
+    console.log('GameScene: Shutting down - NetworkSystem singleton preserved');
+    
     if (this.visualEffectsSystem) {
       this.visualEffectsSystem.destroy();
     }
@@ -1030,6 +1124,9 @@ export class GameScene extends Phaser.Scene {
     }
     if (this.playerManager) {
       this.playerManager.destroy();
+    }
+    if (this.screenShakeSystem) {
+      this.screenShakeSystem.destroy();
     }
     
     // Clean up sprites

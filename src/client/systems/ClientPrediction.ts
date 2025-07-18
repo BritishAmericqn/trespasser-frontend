@@ -1,5 +1,6 @@
 import { Vector2 } from '../../../shared/types';
 import { GAME_CONFIG } from '../../../shared/constants';
+import { CollisionSystem } from './CollisionSystem';
 
 interface InputSnapshot {
   sequence: number;
@@ -16,29 +17,73 @@ export class ClientPrediction {
   private predictedPosition: Vector2 = { x: 240, y: 135 };
   private smoothCorrection: Vector2 | null = null;
   private renderPosition: Vector2 = { x: 240, y: 135 };
+  private collisionSystem: CollisionSystem = new CollisionSystem();
+  private scene: Phaser.Scene | null = null;
   
   // Callback for position updates
   private onPositionUpdate: ((pos: Vector2) => void) | null = null;
   
-  constructor() {
-
+  constructor(scene?: Phaser.Scene) {
+    if (scene) {
+      this.scene = scene;
+    }
+  }
+  
+  setScene(scene: Phaser.Scene): void {
+    this.scene = scene;
   }
   
   setPositionCallback(callback: (pos: Vector2) => void): void {
     this.onPositionUpdate = callback;
   }
   
+  /**
+   * Update wall data for collision detection
+   */
+  private updateWallData(): void {
+    if (!this.scene) return;
+    
+    // Get the destruction renderer from the scene
+    const destructionRenderer = (this.scene as any).destructionRenderer;
+    if (destructionRenderer && destructionRenderer.getWallsData) {
+      const walls = destructionRenderer.getWallsData(false); // Exclude boundary walls
+      
+      // Convert wall data to collision system format
+      const wallData = walls.map((wall: any) => ({
+        id: wall.id,
+        position: wall.position,
+        width: wall.width,
+        height: wall.height,
+        orientation: wall.orientation,
+        destructionMask: wall.destructionMask
+      }));
+      
+      this.collisionSystem.updateWalls(wallData);
+    }
+  }
+  
   // Apply input locally for immediate response
   applyInput(input: any, sequence: number): void {
+    // Update wall data for collision detection
+    this.updateWallData();
+    
     // Calculate movement delta
     const deltaTime = 1/60; // 16.67ms
     const movement = this.calculateMovement(input);
     
-    // Update predicted position
-    this.predictedPosition.x += movement.x * deltaTime;
-    this.predictedPosition.y += movement.y * deltaTime;
+    // Calculate new position before collision detection
+    const newPosition = {
+      x: this.predictedPosition.x + movement.x * deltaTime,
+      y: this.predictedPosition.y + movement.y * deltaTime
+    };
     
-    // Clamp to bounds
+    // Apply collision detection and resolve movement
+    const resolvedPosition = this.collisionSystem.resolveMovement(this.predictedPosition, newPosition);
+    
+    // Update predicted position with resolved position
+    this.predictedPosition = resolvedPosition;
+    
+    // Clamp to game bounds as fallback
     this.predictedPosition.x = Math.max(10, Math.min(GAME_CONFIG.GAME_WIDTH - 10, this.predictedPosition.x));
     this.predictedPosition.y = Math.max(10, Math.min(GAME_CONFIG.GAME_HEIGHT - 10, this.predictedPosition.y));
     
@@ -81,6 +126,9 @@ export class ClientPrediction {
   onGameStateReceived(serverPlayer: any): void {
     if (!serverPlayer) return;
     
+    // Update wall data before reconciliation
+    this.updateWallData();
+    
     // Extract server data
     const serverPos = this.extractServerPosition(serverPlayer);
     const lastProcessedInput = serverPlayer.lastProcessedInput || 0;
@@ -118,17 +166,23 @@ export class ClientPrediction {
       return;
     }
     
-    // Re-apply unprocessed inputs from server position
+    // Re-apply unprocessed inputs from server position with collision detection
     let replayPosition = { ...serverPos };
     
     for (const snapshot of this.inputBuffer) {
       const movement = this.calculateMovement(snapshot.input);
       const deltaTime = 1/60;
       
-      replayPosition.x += movement.x * deltaTime;
-      replayPosition.y += movement.y * deltaTime;
+      // Calculate new position
+      const newPosition = {
+        x: replayPosition.x + movement.x * deltaTime,
+        y: replayPosition.y + movement.y * deltaTime
+      };
       
-      // Clamp to bounds
+      // Apply collision detection
+      replayPosition = this.collisionSystem.resolveMovement(replayPosition, newPosition);
+      
+      // Clamp to bounds as fallback
       replayPosition.x = Math.max(10, Math.min(GAME_CONFIG.GAME_WIDTH - 10, replayPosition.x));
       replayPosition.y = Math.max(10, Math.min(GAME_CONFIG.GAME_HEIGHT - 10, replayPosition.y));
       
@@ -233,7 +287,8 @@ export class ClientPrediction {
       renderPosition: this.renderPosition,
       lastAcknowledged: this.lastAcknowledgedInput,
       bufferSize: this.inputBuffer.length,
-      hasCorrection: this.smoothCorrection !== null
+      hasCorrection: this.smoothCorrection !== null,
+      collisionDebug: this.collisionSystem.getCollisionDebug(this.renderPosition)
     };
   }
   

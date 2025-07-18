@@ -48,10 +48,27 @@ export class LoadingScene extends Phaser.Scene {
   }
 
   private loadWeaponAssets(): void {
-    // Weapon sprites for UI and effects
+    // Current weapon sprites for UI and effects
     this.load.image('weapon_rifle', 'src/assets/rifle.png');
     this.load.image('weapon_pistol', 'src/assets/pistol.png');
     this.load.image('weapon_rocket', 'src/assets/rocketlauncher.png');
+    
+    // NEW: Primary weapon sprites
+    this.load.image('weapon_smg', 'src/assets/smg.png');
+    this.load.image('weapon_shotgun', 'src/assets/shotgun.png');
+    this.load.image('weapon_battlerifle', 'src/assets/battlerifle.png');
+    this.load.image('weapon_sniperrifle', 'src/assets/sniperrifle.png');
+    
+    // NEW: Secondary weapon sprites
+    this.load.image('weapon_revolver', 'src/assets/revolver.png');
+    this.load.image('weapon_suppressedpistol', 'src/assets/suppressedpistol.png');
+    
+    // NEW: Support weapon sprites
+    this.load.image('weapon_machinegun', 'src/assets/machinegun.png');
+    this.load.image('weapon_smokegrenade', 'src/assets/smokegrenade.png');
+    this.load.image('weapon_flashbang', 'src/assets/flashbang.png');
+    this.load.image('weapon_antimaterialrifle', 'src/assets/antimaterialrifle.png');
+    this.load.image('weapon_grenadelauncher', 'src/assets/grenadelauncher.png');
     
     // Projectile sprites
     this.load.image('fraggrenade', 'src/assets/fraggrenade.png');

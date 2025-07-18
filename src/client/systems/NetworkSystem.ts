@@ -3,6 +3,25 @@ import { IGameSystem } from '../../../shared/interfaces/IGameSystem';
 import { EVENTS, GAME_CONFIG } from '../../../shared/constants/index';
 import { InputState } from './InputSystem';
 
+// Connection states enum
+export enum ConnectionState {
+  DISCONNECTED = 'disconnected',
+  CONNECTING = 'connecting', 
+  CONNECTED = 'connected',
+  AUTHENTICATING = 'authenticating',
+  AUTHENTICATED = 'authenticated',
+  FAILED = 'failed'
+}
+
+export interface ServerInfo {
+  game: string;
+  status: string;
+  players: number;
+  maxPlayers: number;
+  passwordRequired: boolean;
+  uptime: number;
+}
+
 export class NetworkSystem implements IGameSystem {
   private scene: Phaser.Scene;
   private socket: Socket | null = null;
@@ -10,13 +29,16 @@ export class NetworkSystem implements IGameSystem {
   private connectionAttempts: number = 0;
   private readonly MAX_RECONNECT_ATTEMPTS = 5;
   private inputsSent: number = 0;
+  private connectionState: ConnectionState = ConnectionState.DISCONNECTED;
+  private currentServerUrl: string = '';
+  private authenticationTimeout: number | null = null;
 
   constructor(scene: Phaser.Scene) {
     this.scene = scene;
   }
 
   initialize(): void {
-    this.connect();
+    // Don't auto-connect anymore - wait for explicit connection request
     this.setupEventListeners();
   }
 
@@ -26,16 +48,40 @@ export class NetworkSystem implements IGameSystem {
   }
 
   destroy(): void {
+    console.log('NetworkSystem: Destroying network connection');
+    
+    // Clear scene event listeners
+    this.scene.events.off(EVENTS.PLAYER_INPUT);
+    this.scene.events.off('weapon:fire');
+    this.scene.events.off('weapon:switch');
+    this.scene.events.off('weapon:reload');
+    this.scene.events.off('ads:toggle');
+    
+    // Disconnect socket
     if (this.socket) {
       this.socket.disconnect();
       this.socket = null;
     }
-    this.scene.events.off(EVENTS.PLAYER_INPUT);
+    
+    if (this.authenticationTimeout) {
+      clearTimeout(this.authenticationTimeout);
+    }
+    
+    this.connectionState = ConnectionState.DISCONNECTED;
+    this.isConnected = false;
   }
 
-  private connect(): void {
+  // Public method to connect to a specific server
+  async connectToServer(serverUrl: string, password: string = ''): Promise<void> {
+    this.currentServerUrl = serverUrl;
+    console.log(`🔌 Attempting to connect to backend at: ${serverUrl}`);
+    this.setConnectionState(ConnectionState.CONNECTING);
+    
     try {
-      this.socket = io(GAME_CONFIG.SERVER_URL, {
+      // First check server info to see if password is required
+      const serverInfo = await this.checkServerStatus(serverUrl);
+      
+      this.socket = io(serverUrl, {
         transports: ['websocket'],
         timeout: 5000,
         reconnection: true,
@@ -45,9 +91,64 @@ export class NetworkSystem implements IGameSystem {
       });
 
       this.setupSocketListeners();
+      
+      // Handle authentication if needed
+      this.socket.on('connect', () => {
+        this.isConnected = true;
+        this.connectionAttempts = 0;
+        this.setConnectionState(ConnectionState.CONNECTED);
+        
+        if (serverInfo.passwordRequired) {
+          this.setConnectionState(ConnectionState.AUTHENTICATING);
+          this.socket!.emit('authenticate', password);
+          
+          // Set 5-second timeout for authentication
+          this.authenticationTimeout = window.setTimeout(() => {
+            this.handleAuthenticationTimeout();
+          }, 5000);
+        } else {
+          this.setConnectionState(ConnectionState.AUTHENTICATED);
+          this.onGameReady();
+        }
+      });
+      
     } catch (error) {
-      console.error('Failed to initialize socket connection:', error);
-      this.handleConnectionError();
+      console.error('Failed to connect to server:', error);
+      this.setConnectionState(ConnectionState.FAILED);
+      this.scene.events.emit('network:connectionError', `Failed to connect: ${error}`);
+    }
+  }
+
+  // Check server status
+  async checkServerStatus(serverUrl: string): Promise<ServerInfo> {
+    try {
+      const response = await fetch(serverUrl);
+      const data = await response.json();
+      return data as ServerInfo;
+    } catch (error) {
+      throw new Error('Server is not responding');
+    }
+  }
+
+  private setConnectionState(state: ConnectionState): void {
+    const previousState = this.connectionState;
+    this.connectionState = state;
+    if (previousState !== state) {
+      console.log(`NetworkSystem: Connection state changed from ${previousState} to ${state}`);
+    }
+    this.scene.events.emit('network:connectionStateChanged', state);
+  }
+
+  private onGameReady(): void {
+    // Notify scene about successful connection and authentication
+    this.scene.events.emit('network:gameReady');
+  }
+
+  private handleAuthenticationTimeout(): void {
+    this.setConnectionState(ConnectionState.FAILED);
+    this.scene.events.emit('network:connectionError', 'Authentication timeout');
+    if (this.socket) {
+      this.socket.disconnect();
     }
   }
 
@@ -59,16 +160,12 @@ export class NetworkSystem implements IGameSystem {
 
     });
 
-    this.socket.on('connect', () => {
-      this.isConnected = true;
-      this.connectionAttempts = 0;
-      
-      // Notify scene about connection
-      this.scene.events.emit('network:connected');
-    });
-
+    // Remove the old connect handler since we handle it in connectToServer
+    
     this.socket.on('disconnect', (reason) => {
+      console.log(`NetworkSystem: Socket disconnected, reason: ${reason}`);
       this.isConnected = false;
+      this.setConnectionState(ConnectionState.DISCONNECTED);
       
       // Notify scene about disconnection
       this.scene.events.emit('network:disconnected', reason);
@@ -82,82 +179,150 @@ export class NetworkSystem implements IGameSystem {
       }
     });
 
+    // New authentication event handlers
+    this.socket.on('authenticated', () => {
+      if (this.authenticationTimeout) {
+        clearTimeout(this.authenticationTimeout);
+        this.authenticationTimeout = null;
+      }
+      this.setConnectionState(ConnectionState.AUTHENTICATED);
+      this.onGameReady();
+    });
+
+    this.socket.on('auth-failed', (reason: string) => {
+      if (this.authenticationTimeout) {
+        clearTimeout(this.authenticationTimeout);
+        this.authenticationTimeout = null;
+      }
+      this.setConnectionState(ConnectionState.FAILED);
+      this.scene.events.emit('network:connectionError', `Authentication failed: ${reason}`);
+    });
+
+    this.socket.on('auth-timeout', (reason: string) => {
+      if (this.authenticationTimeout) {
+        clearTimeout(this.authenticationTimeout);
+        this.authenticationTimeout = null;
+      }
+      this.setConnectionState(ConnectionState.FAILED);
+      this.scene.events.emit('network:connectionError', `Authentication timeout: ${reason}`);
+    });
+
+    this.socket.on('error', (message: string) => {
+      this.setConnectionState(ConnectionState.FAILED);
+      this.scene.events.emit('network:connectionError', message);
+    });
+
         // Listen for game state updates from server
     this.socket.on(EVENTS.GAME_STATE, (gameState: any) => {
-      // Silently emit game state without logging
-      this.scene.events.emit('network:gameState', gameState);
+      // Only process game events if authenticated
+      if (this.connectionState === ConnectionState.AUTHENTICATED) {
+        this.scene.events.emit('network:gameState', gameState);
+      }
     });
 
     // Listen for player join/leave events
     this.socket.on(EVENTS.PLAYER_JOINED, (playerData: any) => {
-      this.scene.events.emit('network:playerJoined', playerData);
+      if (this.connectionState === ConnectionState.AUTHENTICATED) {
+        this.scene.events.emit('network:playerJoined', playerData);
+      }
     });
 
     this.socket.on(EVENTS.PLAYER_LEFT, (playerData: any) => {
-      this.scene.events.emit('network:playerLeft', playerData);
+      if (this.connectionState === ConnectionState.AUTHENTICATED) {
+        this.scene.events.emit('network:playerLeft', playerData);
+      }
     });
 
     // Listen for weapon events from backend
     this.socket.on('weapon:fired', (data: any) => {
-      this.scene.events.emit('backend:weapon:fired', data);
+      if (this.connectionState === ConnectionState.AUTHENTICATED) {
+        this.scene.events.emit('backend:weapon:fired', data);
+      }
     });
 
     this.socket.on('weapon:hit', (data: any) => {
-      this.scene.events.emit('backend:weapon:hit', data);
+      if (this.connectionState === ConnectionState.AUTHENTICATED) {
+        this.scene.events.emit('backend:weapon:hit', data);
+      }
     });
 
     this.socket.on('weapon:miss', (data: any) => {
-      this.scene.events.emit('backend:weapon:miss', data);
+      if (this.connectionState === ConnectionState.AUTHENTICATED) {
+        this.scene.events.emit('backend:weapon:miss', data);
+      }
     });
 
     this.socket.on('weapon:reloaded', (data: any) => {
-      this.scene.events.emit('backend:weapon:reloaded', data);
+      if (this.connectionState === ConnectionState.AUTHENTICATED) {
+        this.scene.events.emit('backend:weapon:reloaded', data);
+      }
     });
 
     this.socket.on('weapon:switched', (data: any) => {
-      this.scene.events.emit('backend:weapon:switched', data);
+      if (this.connectionState === ConnectionState.AUTHENTICATED) {
+        this.scene.events.emit('backend:weapon:switched', data);
+      }
     });
 
     this.socket.on('player:damaged', (data: any) => {
-
-      this.scene.events.emit('backend:player:damaged', data);
+      if (this.connectionState === ConnectionState.AUTHENTICATED) {
+        this.scene.events.emit('backend:player:damaged', data);
+      }
     });
 
     this.socket.on('player:killed', (data: any) => {
-      this.scene.events.emit('backend:player:killed', data);
+      if (this.connectionState === ConnectionState.AUTHENTICATED) {
+        this.scene.events.emit('backend:player:killed', data);
+      }
     });
 
     this.socket.on('wall:damaged', (data: any) => {
-      this.scene.events.emit('backend:wall:damaged', data);
+      if (this.connectionState === ConnectionState.AUTHENTICATED) {
+        this.scene.events.emit('backend:wall:damaged', data);
+      }
     });
 
     this.socket.on('wall:destroyed', (data: any) => {
-      this.scene.events.emit('backend:wall:destroyed', data);
+      if (this.connectionState === ConnectionState.AUTHENTICATED) {
+        this.scene.events.emit('backend:wall:destroyed', data);
+      }
     });
 
     this.socket.on('projectile:created', (data: any) => {
-      this.scene.events.emit('backend:projectile:created', data);
+      if (this.connectionState === ConnectionState.AUTHENTICATED) {
+        this.scene.events.emit('backend:projectile:created', data);
+      }
     });
 
     this.socket.on('projectile:updated', (data: any) => {
-      this.scene.events.emit('backend:projectile:updated', data);
+      if (this.connectionState === ConnectionState.AUTHENTICATED) {
+        this.scene.events.emit('backend:projectile:updated', data);
+      }
     });
 
     this.socket.on('projectile:exploded', (data: any) => {
-      this.scene.events.emit('backend:projectile:exploded', data);
+      if (this.connectionState === ConnectionState.AUTHENTICATED) {
+        this.scene.events.emit('backend:projectile:exploded', data);
+      }
     });
 
     this.socket.on('explosion:created', (data: any) => {
-      this.scene.events.emit('backend:explosion:created', data);
+      if (this.connectionState === ConnectionState.AUTHENTICATED) {
+        this.scene.events.emit('backend:explosion:created', data);
+      }
     });
     
     // Listen for collision events
     this.socket.on('player:collision', (data: any) => {
-      this.scene.events.emit('network:collision', data);
+      if (this.connectionState === ConnectionState.AUTHENTICATED) {
+        this.scene.events.emit('network:collision', data);
+      }
     });
     
     this.socket.on('collision:detected', (data: any) => {
-      this.scene.events.emit('network:collision', data);
+      if (this.connectionState === ConnectionState.AUTHENTICATED) {
+        this.scene.events.emit('network:collision', data);
+      }
     });
   }
 
@@ -189,8 +354,13 @@ export class NetworkSystem implements IGameSystem {
   }
 
   private sendPlayerInput(inputState: InputState): void {
-    if (!this.socket || !this.isConnected) {
-      console.warn('❌ Cannot send input: not connected to server');
+    if (!this.socket || !this.isConnected || this.connectionState !== ConnectionState.AUTHENTICATED) {
+      // Only log once per second to avoid spam
+      const now = Date.now();
+      if (!this.lastInputWarning || now - this.lastInputWarning > 1000) {
+        console.warn(`❌ Cannot send input: socket=${!!this.socket}, connected=${this.isConnected}, state=${this.connectionState}`);
+        this.lastInputWarning = now;
+      }
       return;
     }
 
@@ -201,25 +371,70 @@ export class NetworkSystem implements IGameSystem {
       console.error('Failed to send player input:', error);
     }
   }
+  
+  private lastInputWarning: number = 0;
 
   private handleConnectionError(): void {
     console.error('Max reconnection attempts reached. Connection failed.');
+    this.setConnectionState(ConnectionState.FAILED);
     this.scene.events.emit('network:connectionFailed');
   }
 
-  // Public methods for other systems to use
+  // Method to update scene reference (when transitioning between scenes)
+  updateScene(newScene: Phaser.Scene): void {
+    console.log(`NetworkSystem: Updating scene from ${this.scene.scene.key} to ${newScene.scene.key}`);
+    console.log(`Current state: connected=${this.isConnected}, authenticated=${this.isAuthenticated()}, state=${this.connectionState}`);
+    
+    // Remove old event listeners from previous scene
+    this.scene.events.off(EVENTS.PLAYER_INPUT);
+    this.scene.events.off('weapon:fire');
+    this.scene.events.off('weapon:switch');
+    this.scene.events.off('weapon:reload');
+    this.scene.events.off('ads:toggle');
+    
+    // Update scene reference
+    this.scene = newScene;
+    
+    // Re-setup event listeners for new scene
+    this.setupEventListeners();
+    
+    console.log('NetworkSystem: Updated scene reference and re-initialized event listeners');
+    
+    // If already authenticated, notify the new scene
+    if (this.connectionState === ConnectionState.AUTHENTICATED) {
+      console.log('NetworkSystem: Already authenticated, notifying new scene');
+      setTimeout(() => {
+        this.scene.events.emit('network:gameReady');
+        this.scene.events.emit('network:connected');
+      }, 100);
+    }
+  }
+
+  // Public getters
   isSocketConnected(): boolean {
     return this.isConnected;
+  }
+
+  getConnectionState(): ConnectionState {
+    return this.connectionState;
+  }
+
+  isAuthenticated(): boolean {
+    return this.connectionState === ConnectionState.AUTHENTICATED;
   }
 
   getSocket(): Socket | null {
     return this.socket;
   }
 
+  getCurrentServerUrl(): string {
+    return this.currentServerUrl;
+  }
+
   // Method to manually send events to server
   emit(event: string, data?: any): void {
-    if (!this.socket || !this.isConnected) {
-      console.warn(`Cannot emit ${event}: not connected to server`);
+    if (!this.socket || !this.isConnected || this.connectionState !== ConnectionState.AUTHENTICATED) {
+      console.warn(`Cannot emit ${event}: not authenticated`);
       return;
     }
 

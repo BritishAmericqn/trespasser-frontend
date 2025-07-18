@@ -1,6 +1,9 @@
 import Phaser from 'phaser';
 import { LoadingScene } from './client/scenes/LoadingScene';
 import { MenuScene } from './client/scenes/MenuScene';
+import { ServerConnectionScene } from './client/scenes/ServerConnectionScene';
+import { ServerConnectionSceneText } from './client/scenes/ServerConnectionSceneText';
+import { ConfigureScene } from './client/scenes/ConfigureScene';
 import { GameScene } from './client/scenes/GameScene';
 
 const config: Phaser.Types.Core.GameConfig = {
@@ -14,7 +17,10 @@ const config: Phaser.Types.Core.GameConfig = {
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH
   },
-  scene: [LoadingScene, MenuScene, GameScene]
+  dom: {
+    createContainer: true
+  },
+  scene: [LoadingScene, MenuScene, ServerConnectionScene, ServerConnectionSceneText, ConfigureScene, GameScene]
 };
 
 // Create and start the game

@@ -82,6 +82,7 @@ export class AssetManager {
     let textureKey: string;
     
     switch (weaponType) {
+      // Current weapons
       case 'rifle':
         textureKey = 'weapon_rifle';
         break;
@@ -91,6 +92,49 @@ export class AssetManager {
       case 'rocket':
         textureKey = 'weapon_rocket';
         break;
+      
+      // NEW: Primary weapons
+      case 'smg':
+        textureKey = 'weapon_smg';
+        break;
+      case 'shotgun':
+        textureKey = 'weapon_shotgun';
+        break;
+      case 'battlerifle':
+        textureKey = 'weapon_battlerifle';
+        break;
+      case 'sniperrifle':
+        textureKey = 'weapon_sniperrifle';
+        break;
+      
+      // NEW: Secondary weapons
+      case 'revolver':
+        textureKey = 'weapon_revolver';
+        break;
+      case 'suppressedpistol':
+        textureKey = 'weapon_suppressedpistol';
+        break;
+      
+      // NEW: Support weapons
+      case 'machinegun':
+        textureKey = 'weapon_machinegun';
+        break;
+      case 'smokegrenade':
+        textureKey = 'weapon_smokegrenade';
+        break;
+      case 'flashbang':
+        textureKey = 'weapon_flashbang';
+        break;
+      case 'antimaterialrifle':
+        textureKey = 'weapon_antimaterialrifle';
+        break;
+      case 'grenadelauncher':
+        textureKey = 'weapon_grenadelauncher';
+        break;
+      case 'grenade': // Keep existing grenade support
+        textureKey = 'fraggrenade';
+        break;
+      
       default:
         textureKey = 'weapon_rifle'; // Default fallback
     }

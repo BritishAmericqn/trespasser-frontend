@@ -506,6 +506,13 @@ export class VisualEffectsSystem implements IGameSystem {
     const explosion = this.assetManager.showExplosion(position.x, position.y);
     this.explosions.push(explosion);
     
+    // Emit explosion event for screen shake system
+    this.scene.events.emit('explosion:effect', {
+      position: position,
+      radius: radius,
+      weaponType: radius > 45 ? 'rocket' : 'grenade' // Determine weapon type by radius
+    });
+    
     // Add some particle debris for extra impact
     const particleCount = Math.min(12, Math.floor(radius / 3));
     
