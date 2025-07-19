@@ -1,5 +1,6 @@
 import { IGameSystem } from '../../../shared/interfaces/IGameSystem';
 import { AssetManager } from '../utils/AssetManager';
+import { GAME_CONFIG } from '../../../shared/constants/index';
 
 interface BulletTrail {
   line: Phaser.GameObjects.Graphics;
@@ -17,16 +18,18 @@ interface MuzzleFlashData {
 
 interface Projectile {
   id: string;
-  type: 'rocket' | 'grenade';
+  type: 'rocket' | 'grenade' | 'grenadelauncher' | 'smokegrenade' | 'flashbang';
   position: { x: number; y: number };
   velocity: { x: number; y: number };
   trail: Phaser.GameObjects.Graphics;
-  sprite?: Phaser.GameObjects.Sprite | Phaser.GameObjects.Container; // Visual representation (for grenade)
+  sprite?: Phaser.GameObjects.Sprite | Phaser.GameObjects.Container; // Visual representation
   rotation?: number; // Current rotation (for spinning)
   spinSpeed?: number; // Rotation speed based on velocity
   startTime: number;
   lifetime: number;
   lastSmokeTime?: number; // Track when we last spawned smoke
+  smokeEffect?: Phaser.GameObjects.Graphics; // For smoke grenade cloud
+  flashEffect?: Phaser.GameObjects.Rectangle; // For flashbang screen effect
 }
 
 interface PendingShot {
@@ -186,7 +189,9 @@ export class VisualEffectsSystem implements IGameSystem {
         // Fallback: try without weapon type if backend didn't send it
         if (!pendingShot && !data.weaponType) {
           // Try all weapon types
-          const weaponTypes = ['rifle', 'pistol', 'rocket', 'grenade'];
+          const weaponTypes = ['rifle', 'pistol', 'rocket', 'grenade', 'smg', 'shotgun', 
+                              'battlerifle', 'sniperrifle', 'revolver', 'suppressedpistol',
+                              'grenadelauncher', 'machinegun', 'antimaterialrifle'];
           for (const weapon of weaponTypes) {
             pendingKey = `${data.playerId}_${weapon}`;
             pendingShot = this.pendingShots.get(pendingKey);
@@ -221,7 +226,9 @@ export class VisualEffectsSystem implements IGameSystem {
       // Fallback: try without weapon type if backend didn't send it
       if (!pendingShot && !data.weaponType) {
         // Try all weapon types
-        const weaponTypes = ['rifle', 'pistol', 'rocket', 'grenade'];
+        const weaponTypes = ['rifle', 'pistol', 'rocket', 'grenade', 'smg', 'shotgun', 
+                            'battlerifle', 'sniperrifle', 'revolver', 'suppressedpistol',
+                            'grenadelauncher', 'machinegun', 'antimaterialrifle'];
         for (const weapon of weaponTypes) {
           pendingKey = `${data.playerId}_${weapon}`;
           pendingShot = this.pendingShots.get(pendingKey);
@@ -279,7 +286,9 @@ export class VisualEffectsSystem implements IGameSystem {
           // Fallback: try without weapon type if backend didn't send it
           if (!pendingShot && !data.weaponType) {
             // Try all weapon types
-            const weaponTypes = ['rifle', 'pistol', 'rocket', 'grenade'];
+            const weaponTypes = ['rifle', 'pistol', 'rocket', 'grenade', 'smg', 'shotgun', 
+                                'battlerifle', 'sniperrifle', 'revolver', 'suppressedpistol',
+                                'grenadelauncher', 'machinegun', 'antimaterialrifle'];
             for (const weapon of weaponTypes) {
               pendingKey = `${data.playerId}_${weapon}`;
               pendingShot = this.pendingShots.get(pendingKey);
@@ -356,18 +365,23 @@ export class VisualEffectsSystem implements IGameSystem {
       }
       
       // Handle different weapon types differently
-      if (data.weaponType === 'grenade' || data.weaponType === 'rocket') {
+      const projectileWeapons = ['grenade', 'rocket', 'rocketlauncher', 'grenadelauncher', 
+                                 'smokegrenade', 'flashbang'];
+      if (projectileWeapons.includes(data.weaponType)) {
         // For projectiles, don't show immediate trail - wait for backend projectile creation
         // Just show the launch effect
   
         
       } else {
-        // For hitscan weapons (rifle, pistol), NO immediate trail - wait for backend response
+        // For hitscan weapons, NO immediate trail - wait for backend response
         // This provides accurate trails that include weapon inaccuracy and backend hit detection
-        if (data.weaponType === 'rifle' || data.weaponType === 'pistol') {
+        const hitscanWeapons = ['rifle', 'pistol', 'smg', 'shotgun', 'battlerifle', 
+                                'sniperrifle', 'revolver', 'suppressedpistol', 
+                                'machinegun', 'antimaterialrifle'];
+        if (hitscanWeapons.includes(data.weaponType)) {
           console.log(`🎯 Fired ${data.weaponType} - waiting for backend hit result`);
         } else if (data.weaponType) {
-          console.log(`🎯 Fired unknown weapon type: ${data.weaponType}`);
+          console.log(`🎯 Fired projectile weapon: ${data.weaponType}`);
         }
       }
     });
@@ -698,6 +712,144 @@ export class VisualEffectsSystem implements IGameSystem {
     return distance > 5;
   }
 
+  showSmokeEffect(position: { x: number; y: number }, radius: number): void {
+    // Create smoke cloud that expands and persists
+    const smokeCloud = this.scene.add.graphics();
+    smokeCloud.setDepth(45); // Above most effects but below UI
+    
+    // Initial small smoke
+    smokeCloud.fillStyle(0xCCCCCC, 0.8);
+    smokeCloud.fillCircle(position.x, position.y, 5);
+    
+    // Expand the smoke cloud over time
+    this.scene.tweens.add({
+      targets: smokeCloud,
+      scaleX: radius / 5,
+      scaleY: radius / 5,
+      alpha: 0.6,
+      duration: 1000,
+      ease: 'Power2',
+      onComplete: () => {
+        // Keep smoke persisting for several seconds
+        this.scene.time.delayedCall(8000, () => {
+          // Fade out slowly
+          this.scene.tweens.add({
+            targets: smokeCloud,
+            alpha: 0,
+            duration: 2000,
+            onComplete: () => {
+              smokeCloud.destroy();
+            }
+          });
+        });
+      }
+    });
+    
+    // Add swirling smoke particles for effect
+    for (let i = 0; i < 8; i++) {
+      const particle = this.scene.add.graphics();
+      particle.setDepth(44);
+      particle.fillStyle(0xDDDDDD, 0.5);
+      particle.fillCircle(0, 0, 3);
+      
+      // Random position within initial area
+      const angle = (Math.PI * 2 * i) / 8;
+      const distance = 10 + Math.random() * 10;
+      particle.x = position.x + Math.cos(angle) * distance;
+      particle.y = position.y + Math.sin(angle) * distance;
+      
+      // Drift outward
+      const driftAngle = angle + (Math.random() - 0.5) * 0.5;
+      const driftDistance = radius * 0.8;
+      
+      this.scene.tweens.add({
+        targets: particle,
+        x: position.x + Math.cos(driftAngle) * driftDistance,
+        y: position.y + Math.sin(driftAngle) * driftDistance,
+        alpha: 0,
+        scale: 3,
+        duration: 3000,
+        ease: 'Power2',
+        onComplete: () => {
+          particle.destroy();
+        }
+      });
+    }
+  }
+
+  showFlashbangEffect(position: { x: number; y: number }, radius: number): void {
+    const gameScene = this.scene as any;
+    const localPlayerId = gameScene.networkSystem?.getSocket()?.id;
+    const playerPos = gameScene.playerPosition;
+    
+    if (!playerPos || !localPlayerId) return;
+    
+    // Calculate distance from player to flashbang
+    const distance = Math.sqrt(
+      Math.pow(position.x - playerPos.x, 2) + 
+      Math.pow(position.y - playerPos.y, 2)
+    );
+    
+    // Only flash if within radius
+    if (distance <= radius) {
+      // Create white flash overlay
+      const flash = this.scene.add.rectangle(
+        this.scene.cameras.main.centerX,
+        this.scene.cameras.main.centerY,
+        GAME_CONFIG.GAME_WIDTH,
+        GAME_CONFIG.GAME_HEIGHT,
+        0xFFFFFF
+      );
+      flash.setScrollFactor(0); // UI layer
+      flash.setDepth(100); // Above everything
+      
+      // Intensity based on distance (closer = stronger)
+      const intensity = 1 - (distance / radius);
+      flash.setAlpha(Math.min(0.95, intensity));
+      
+      // Quick flash then fade
+      this.scene.tweens.add({
+        targets: flash,
+        alpha: 0,
+        duration: 2500 * intensity, // Longer fade for closer flashes
+        ease: 'Power2',
+        onComplete: () => {
+          flash.destroy();
+        }
+      });
+      
+      // Add slight disorientation (screen shake)
+      if (intensity > 0.5) {
+        this.scene.cameras.main.shake(1000 * intensity, 0.01 * intensity);
+      }
+      
+      // Show flash particles at detonation point
+      for (let i = 0; i < 6; i++) {
+        const particle = this.scene.add.graphics();
+        particle.setDepth(60);
+        particle.fillStyle(0xFFFF00, 0.8);
+        particle.fillCircle(0, 0, 2);
+        
+        const angle = (Math.PI * 2 * i) / 6;
+        particle.x = position.x;
+        particle.y = position.y;
+        
+        this.scene.tweens.add({
+          targets: particle,
+          x: position.x + Math.cos(angle) * 30,
+          y: position.y + Math.sin(angle) * 30,
+          alpha: 0,
+          scale: 2,
+          duration: 300,
+          ease: 'Power2',
+          onComplete: () => {
+            particle.destroy();
+          }
+        });
+      }
+    }
+  }
+
   showBulletTrail(startPos: { x: number; y: number }, endPos: { x: number; y: number }, weaponType: string = 'rifle'): void {
     const trail = this.scene.add.graphics();
     trail.setDepth(40);
@@ -709,25 +861,81 @@ export class VisualEffectsSystem implements IGameSystem {
     let alpha = 1.0;
     
     switch (weaponType) {
+      // Primary weapons
       case 'rifle':
         color = 0xFFD700; // Gold
         width = 1;
         duration = 250;
         alpha = 1.0;
         break;
+      case 'smg':
+        color = 0xFFEE88; // Light yellow
+        width = 0.7;
+        duration = 180;
+        alpha = 0.9;
+        break;
+      case 'shotgun':
+        // Shotgun has multiple pellets, each trail should be thin
+        color = 0xFFAA00; // Orange
+        width = 0.4;
+        duration = 150;
+        alpha = 0.8;
+        break;
+      case 'battlerifle':
+        color = 0xFFCC00; // Deep gold
+        width = 1.2;
+        duration = 280;
+        alpha = 1.0;
+        break;
+      case 'sniperrifle':
+        color = 0xFFFFFF; // Pure white
+        width = 1.5;
+        duration = 350;
+        alpha = 1.0;
+        break;
+        
+      // Secondary weapons  
       case 'pistol':
         color = 0xFFFFFF; // White
         width = 0.5;
         duration = 200;
         alpha = 1.0;
         break;
+      case 'revolver':
+        color = 0xFFBB00; // Orange-yellow
+        width = 0.8;
+        duration = 220;
+        alpha = 1.0;
+        break;
+      case 'suppressedpistol':
+        color = 0xCCCCCC; // Light gray (subsonic)
+        width = 0.3;
+        duration = 100;
+        alpha = 0.5;
+        break;
+        
+      // Support weapons
+      case 'machinegun':
+        color = 0xFFDD00; // Yellow
+        width = 1.1;
+        duration = 240;
+        alpha = 1.0;
+        break;
+      case 'antimaterialrifle':
+        color = 0xFFFFFF; // Pure white
+        width = 2.0; // Thick trail
+        duration = 400;
+        alpha = 1.0;
+        break;
       case 'grenade':
+      case 'grenadelauncher':
         color = 0x808080; // Gray (matching projectile trail)
         width = 1; // Thin line
         duration = 400;
         alpha = 0.3; // Low opacity like projectile trail
         break;
       case 'rocket':
+      case 'rocketlauncher':
         color = 0xFF0000; // Red
         width = 3;
         duration = 500;
@@ -809,15 +1017,37 @@ export class VisualEffectsSystem implements IGameSystem {
     
     projectile.trail.setDepth(40);
     
-    // Create visual sprite for grenade
-    if (projectile.type === 'grenade') {
-      // Create the grenade sprite
-      const grenadeSprite = this.scene.add.sprite(data.position.x, data.position.y, 'fraggrenade');
-      grenadeSprite.setDepth(45); // Above trails but below UI
-      grenadeSprite.setScale(0.8); // Scale down slightly for game size
-      grenadeSprite.setOrigin(0.5, 0.5); // Center origin for rotation
+    // Create visual sprite based on projectile type
+    let textureKey: string | null = null;
+    let logEmoji = '💣';
+    
+    switch (projectile.type) {
+      case 'grenade':
+        textureKey = 'fraggrenade';
+        logEmoji = '💣';
+        break;
+      case 'smokegrenade':
+        textureKey = 'weapon_smokegrenade';
+        logEmoji = '🌫️';
+        break;
+      case 'flashbang':
+        textureKey = 'weapon_flashbang';
+        logEmoji = '💥';
+        break;
+      case 'grenadelauncher':
+        textureKey = 'fraggrenade'; // Uses same sprite as grenade
+        logEmoji = '💣';
+        break;
+    }
+    
+    if (textureKey) {
+      // Create the projectile sprite
+      const projSprite = this.scene.add.sprite(data.position.x, data.position.y, textureKey);
+      projSprite.setDepth(45); // Above trails but below UI
+      projSprite.setScale(0.8); // Scale down slightly for game size
+      projSprite.setOrigin(0.5, 0.5); // Center origin for rotation
       
-      projectile.sprite = grenadeSprite;
+      projectile.sprite = projSprite;
       projectile.rotation = 0;
       
       // Calculate spin speed based on velocity magnitude
@@ -826,7 +1056,7 @@ export class VisualEffectsSystem implements IGameSystem {
       // Spin faster when thrown harder, but cap it
       projectile.spinSpeed = Math.min(speed * 0.02, 10); // Radians per update
       
-      console.log(`💣 Created grenade projectile ${data.id} with spin speed ${projectile.spinSpeed.toFixed(2)}`);
+      console.log(`${logEmoji} Created ${projectile.type} projectile ${data.id} with spin speed ${projectile.spinSpeed.toFixed(2)}`);
     }
     
     this.projectiles.set(projectile.id, projectile);
@@ -838,12 +1068,14 @@ export class VisualEffectsSystem implements IGameSystem {
       const oldPos = { ...projectile.position };
       projectile.position = { ...position };
       
-      // Update sprite position and rotation for grenades
-      if (projectile.sprite && projectile.type === 'grenade') {
+      // Update sprite position and rotation for thrown projectiles
+      if (projectile.sprite) {
         projectile.sprite.setPosition(position.x, position.y);
         
-        // Update rotation with slowing spin over time
-        if (projectile.rotation !== undefined && projectile.spinSpeed !== undefined) {
+        // Update rotation with slowing spin over time (for grenades and flashbangs)
+        if (projectile.rotation !== undefined && projectile.spinSpeed !== undefined &&
+            (projectile.type === 'grenade' || projectile.type === 'grenadelauncher' || 
+             projectile.type === 'flashbang' || projectile.type === 'smokegrenade')) {
           const elapsed = (Date.now() - projectile.startTime) / 1000; // seconds
           // Slow down spin over time (air resistance)
           const dampingFactor = Math.max(0.1, 1 - elapsed * 0.3); // Reduce by 30% per second, min 10%
@@ -861,30 +1093,53 @@ export class VisualEffectsSystem implements IGameSystem {
 
   private drawProjectileTrailSegment(projectile: Projectile, fromPos: { x: number; y: number }, toPos: { x: number; y: number }): void {
     // Different trail styles for different projectile types
-    if (projectile.type === 'rocket') {
-      // For rockets, primarily use smoke particles, no harsh line
-      const now = Date.now();
-      if (!projectile.lastSmokeTime || now - projectile.lastSmokeTime > 25) { // More frequent smoke
-        // Add multiple smoke particles for denser trail
-        for (let i = 0; i < 2; i++) {
-          this.addRocketSmokeParticle(toPos);
+    switch (projectile.type) {
+      case 'rocket':
+        // For rockets, primarily use smoke particles, no harsh line
+        const now = Date.now();
+        if (!projectile.lastSmokeTime || now - projectile.lastSmokeTime > 25) { // More frequent smoke
+          // Add multiple smoke particles for denser trail
+          for (let i = 0; i < 2; i++) {
+            this.addRocketSmokeParticle(toPos);
+          }
+          projectile.lastSmokeTime = now;
         }
-        projectile.lastSmokeTime = now;
-      }
-      
-      // Very faint connecting line
-      projectile.trail.lineStyle(1, 0xCCCCCC, 0.1); // Thin light gray line with very low opacity
-      projectile.trail.beginPath();
-      projectile.trail.moveTo(fromPos.x, fromPos.y);
-      projectile.trail.lineTo(toPos.x, toPos.y);
-      projectile.trail.strokePath();
-    } else if (projectile.type === 'grenade') {
-      // Grenade trail - thin gray line
-      projectile.trail.lineStyle(1, 0x808080, 0.3);
-      projectile.trail.beginPath();
-      projectile.trail.moveTo(fromPos.x, fromPos.y);
-      projectile.trail.lineTo(toPos.x, toPos.y);
-      projectile.trail.strokePath();
+        
+        // Very faint connecting line
+        projectile.trail.lineStyle(1, 0xCCCCCC, 0.1); // Thin light gray line with very low opacity
+        projectile.trail.beginPath();
+        projectile.trail.moveTo(fromPos.x, fromPos.y);
+        projectile.trail.lineTo(toPos.x, toPos.y);
+        projectile.trail.strokePath();
+        break;
+        
+      case 'grenade':
+      case 'grenadelauncher':
+        // Grenade trail - thin gray line
+        projectile.trail.lineStyle(1, 0x808080, 0.3);
+        projectile.trail.beginPath();
+        projectile.trail.moveTo(fromPos.x, fromPos.y);
+        projectile.trail.lineTo(toPos.x, toPos.y);
+        projectile.trail.strokePath();
+        break;
+        
+      case 'smokegrenade':
+        // Smoke grenade - faint white trail
+        projectile.trail.lineStyle(0.8, 0xFFFFFF, 0.2);
+        projectile.trail.beginPath();
+        projectile.trail.moveTo(fromPos.x, fromPos.y);
+        projectile.trail.lineTo(toPos.x, toPos.y);
+        projectile.trail.strokePath();
+        break;
+        
+      case 'flashbang':
+        // Flashbang - faint yellow trail
+        projectile.trail.lineStyle(0.8, 0xFFFF00, 0.2);
+        projectile.trail.beginPath();
+        projectile.trail.moveTo(fromPos.x, fromPos.y);
+        projectile.trail.lineTo(toPos.x, toPos.y);
+        projectile.trail.strokePath();
+        break;
     }
   }
 
@@ -924,7 +1179,7 @@ export class VisualEffectsSystem implements IGameSystem {
   private handleProjectileExplosion(id: string, position: { x: number; y: number }, radius: number): void {
     const projectile = this.projectiles.get(id);
     if (projectile) {
-      // Destroy grenade sprite if it exists
+      // Destroy projectile sprite if it exists
       if (projectile.sprite) {
         projectile.sprite.destroy();
       }
@@ -940,11 +1195,29 @@ export class VisualEffectsSystem implements IGameSystem {
         }
       });
       
-      // Show explosion at the final position
-      const explosionRadius = projectile.type === 'rocket' ? radius || 50 : radius || 40;
-      this.showExplosionEffect(position, explosionRadius);
-      
-      console.log(`💥 ${projectile.type} exploded at (${position.x.toFixed(1)}, ${position.y.toFixed(1)})`);
+      // Show appropriate effect based on projectile type
+      switch (projectile.type) {
+        case 'rocket':
+          this.showExplosionEffect(position, radius || 50);
+          console.log(`🚀 Rocket exploded at (${position.x.toFixed(1)}, ${position.y.toFixed(1)})`);
+          break;
+          
+        case 'grenade':
+        case 'grenadelauncher':
+          this.showExplosionEffect(position, radius || 40);
+          console.log(`💣 ${projectile.type} exploded at (${position.x.toFixed(1)}, ${position.y.toFixed(1)})`);
+          break;
+          
+        case 'smokegrenade':
+          this.showSmokeEffect(position, radius || 60);
+          console.log(`🌫️ Smoke grenade deployed at (${position.x.toFixed(1)}, ${position.y.toFixed(1)})`);
+          break;
+          
+        case 'flashbang':
+          this.showFlashbangEffect(position, radius || 100);
+          console.log(`💥 Flashbang detonated at (${position.x.toFixed(1)}, ${position.y.toFixed(1)})`);
+          break;
+      }
     }
   }
 

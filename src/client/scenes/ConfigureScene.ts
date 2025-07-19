@@ -668,8 +668,8 @@ export class ConfigureScene extends Phaser.Scene {
     }
 
     // Store loadout for GameScene to use
-    this.registry.set('playerLoadout', this.loadout);
-    console.log('ConfigureScene: Saved loadout:', this.loadout);
+    this.game.registry.set('playerLoadout', this.loadout);
+    console.log('ConfigureScene: Saved loadout to GAME registry:', this.loadout);
     
     // Check if we have NetworkSystemSingleton and are already connected
     if (typeof NetworkSystemSingleton !== 'undefined' && NetworkSystemSingleton.hasInstance()) {

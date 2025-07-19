@@ -30,31 +30,107 @@ export async function initializeGameAudio(): Promise<void> {
  */
 export function fireWeapon(weaponType: string, playerPosition?: { x: number, y: number }): void {
   switch (weaponType) {
-    case 'pistol':
-      // Try real sound first, fall back to synthetic
-      if (audioManager.playWeaponSound('pistol', 'shot', { volume: 0.8 })) {
-        audioManager.playShellDrop(0.2);
-      } else {
-        // Use synthetic sound as fallback
-        audioTest.playTestSound('shoot');
-        console.log('🔊 Using synthetic pistol sound (add real files to /src/assets/audio/)');
-      }
-      break;
-      
+    // Primary weapons
     case 'rifle':
       if (audioManager.playWeaponSound('rifle', 'shot', { volume: 1.0 })) {
         audioManager.playShellDrop(0.15);
       } else {
         audioTest.playTestSound('shoot');
-        console.log('🔊 Using synthetic rifle sound');
       }
       break;
       
-    case 'rocketlauncher':
-      if (!audioManager.playWeaponSound('rocket', 'launch', { volume: 1.2 })) {
-        audioTest.playTestSound('explosion');
-        console.log('🔊 Using synthetic explosion sound');
+    case 'smg':
+      if (audioManager.playWeaponSound('smg', 'shot', { volume: 0.7 })) {
+        audioManager.playShellDrop(0.1);
+      } else {
+        audioTest.playTestSound('shoot');
       }
+      break;
+      
+    case 'shotgun':
+      if (audioManager.playWeaponSound('shotgun', 'shot', { volume: 1.2 })) {
+        audioManager.playShellDrop(0.25);
+      } else {
+        audioTest.playTestSound('shoot');
+      }
+      break;
+      
+    case 'battlerifle':
+      if (audioManager.playWeaponSound('battlerifle', 'shot', { volume: 1.1 })) {
+        audioManager.playShellDrop(0.18);
+      } else {
+        audioTest.playTestSound('shoot');
+      }
+      break;
+      
+    case 'sniperrifle':
+      if (audioManager.playWeaponSound('sniperrifle', 'shot', { volume: 1.3 })) {
+        audioManager.playShellDrop(0.3);
+      } else {
+        audioTest.playTestSound('shoot');
+      }
+      break;
+      
+    // Secondary weapons
+    case 'pistol':
+      if (audioManager.playWeaponSound('pistol', 'shot', { volume: 0.8 })) {
+        audioManager.playShellDrop(0.2);
+      } else {
+        audioTest.playTestSound('shoot');
+      }
+      break;
+      
+    case 'revolver':
+      if (audioManager.playWeaponSound('revolver', 'shot', { volume: 1.0 })) {
+        // No shell drop for revolver (keeps casings)
+      } else {
+        audioTest.playTestSound('shoot');
+      }
+      break;
+      
+    case 'suppressedpistol':
+      if (audioManager.playWeaponSound('suppressedpistol', 'shot', { volume: 0.3 })) {
+        audioManager.playShellDrop(0.2);
+      } else {
+        audioTest.playTestSound('shoot');
+      }
+      break;
+      
+    // Support weapons
+    case 'rocket':
+    case 'rocketlauncher':
+      if (!audioManager.playWeaponSound('rocketlauncher', 'launch', { volume: 1.2 })) {
+        audioTest.playTestSound('explosion');
+      }
+      break;
+      
+    case 'grenadelauncher':
+      if (!audioManager.playWeaponSound('grenadelauncher', 'shot', { volume: 1.0 })) {
+        audioTest.playTestSound('shoot');
+      }
+      break;
+      
+    case 'machinegun':
+      if (audioManager.playWeaponSound('machinegun', 'shot', { volume: 1.1 })) {
+        audioManager.playShellDrop(0.12);
+      } else {
+        audioTest.playTestSound('shoot');
+      }
+      break;
+      
+    case 'antimaterialrifle':
+      if (audioManager.playWeaponSound('antimaterialrifle', 'shot', { volume: 1.5 })) {
+        audioManager.playShellDrop(0.4);
+      } else {
+        audioTest.playTestSound('shoot');
+      }
+      break;
+      
+    // Thrown weapons handled elsewhere
+    case 'grenade':
+    case 'smokegrenade':
+    case 'flashbang':
+      // These don't have firing sounds, handled in throw events
       break;
       
     default:
@@ -104,20 +180,52 @@ export function playExplosion(explosionType: 'rocket' | 'grenade', position: { x
 }
 
 /**
- * Example grenade sequence
+ * Thrown weapon sounds
  */
-export function throwGrenade(): void {
-  // Pin pull
-  if (!audioManager.playSoundIfAvailable('grenade_pin', { volume: 0.5 })) {
-    audioTest.playTestSound('click');
+export function throwWeapon(weaponType: string): void {
+  switch (weaponType) {
+    case 'grenade':
+      // Pin pull
+      if (!audioManager.playWeaponSound('grenade', 'pin', { volume: 0.5 })) {
+        audioTest.playTestSound('click');
+      }
+      
+      // Throw sound after short delay
+      setTimeout(() => {
+        if (!audioManager.playWeaponSound('grenade', 'throw', { volume: 0.6 })) {
+          audioTest.playTestSound('click');
+        }
+      }, 300);
+      break;
+      
+    case 'smokegrenade':
+      // Pin pull
+      if (!audioManager.playWeaponSound('smokegrenade', 'pin', { volume: 0.5 })) {
+        audioTest.playTestSound('click');
+      }
+      
+      // Throw sound after short delay
+      setTimeout(() => {
+        if (!audioManager.playWeaponSound('smokegrenade', 'throw', { volume: 0.6 })) {
+          audioTest.playTestSound('click');
+        }
+      }, 300);
+      break;
+      
+    case 'flashbang':
+      // Pin pull
+      if (!audioManager.playWeaponSound('flashbang', 'pin', { volume: 0.5 })) {
+        audioTest.playTestSound('click');
+      }
+      
+      // Throw sound after short delay
+      setTimeout(() => {
+        if (!audioManager.playWeaponSound('flashbang', 'throw', { volume: 0.6 })) {
+          audioTest.playTestSound('click');
+        }
+      }, 300);
+      break;
   }
-  
-  // Throw sound after short delay
-  setTimeout(() => {
-    if (!audioManager.playSoundIfAvailable('grenade_throw', { volume: 0.6 })) {
-      audioTest.playTestSound('click');
-    }
-  }, 300);
 }
 
 export function grenadeHitGround(): void {

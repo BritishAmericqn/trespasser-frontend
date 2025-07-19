@@ -7,24 +7,67 @@ interface WeaponData {
   isReloading: boolean;
 }
 
-interface PlayerWeapons {
-  rifle: WeaponData;
-  pistol: WeaponData;
-  grenade: WeaponData;
-  rocket: WeaponData;
-}
-
 export class WeaponUI implements IGameSystem {
   private scene: Phaser.Scene;
   private health: number = 100;
   private maxHealth: number = 100;
   private currentWeapon: string = 'rifle';
-  private weapons: PlayerWeapons = {
-    rifle: { currentAmmo: 30, reserveAmmo: 90, isReloading: false },
-    pistol: { currentAmmo: 12, reserveAmmo: 60, isReloading: false },
-    grenade: { currentAmmo: 1, reserveAmmo: 3, isReloading: false },
-    rocket: { currentAmmo: 1, reserveAmmo: 4, isReloading: false }
+  
+  // Magazine sizes matching backend spec
+  private readonly MAGAZINE_SIZES: Record<string, number> = {
+    // Primary Weapons
+    rifle: 30,
+    smg: 35,
+    shotgun: 8,
+    battlerifle: 20,
+    sniperrifle: 5,
+    
+    // Secondary Weapons
+    pistol: 12,
+    revolver: 6,
+    suppressedpistol: 15,
+    
+    // Support Weapons
+    grenadelauncher: 6,
+    machinegun: 100,
+    antimaterialrifle: 5,
+    
+    // Thrown Weapons (total count)
+    grenade: 2,
+    smokegrenade: 2,
+    flashbang: 2,
+    rocket: 1  // Rocket launcher
   };
+  
+  // Max reserve ammo (generous for testing)
+  private readonly MAX_RESERVE_AMMO: Record<string, number> = {
+    // Primary
+    rifle: 300,         // Increased from 180
+    smg: 350,           // Increased from 210
+    shotgun: 80,        // Increased from 32
+    battlerifle: 200,   // Increased from 120
+    sniperrifle: 50,    // Increased from 30
+    
+    // Secondary
+    pistol: 120,        // Increased from 72
+    revolver: 60,       // Increased from 36
+    suppressedpistol: 150, // Increased from 90
+    
+    // Support
+    grenadelauncher: 30, // Increased from 18
+    machinegun: 500,    // Increased from 300
+    antimaterialrifle: 40, // Increased from 20
+    
+    // Thrown
+    grenade: 5,         // Increased from 2
+    smokegrenade: 5,    // Increased from 2
+    flashbang: 5,       // Increased from 2
+    rocket: 5           // Increased from 3
+  };
+  
+  // Dynamic weapon storage
+  private weapons: Map<string, WeaponData> = new Map();
+  
   private grenadeCharge: number = 0;
   private isADS: boolean = false;
   private lastDamageTime: number = 0;
@@ -35,8 +78,16 @@ export class WeaponUI implements IGameSystem {
   }
 
   initialize(): void {
+    // Initialize all weapons with their magazine sizes and reserve ammo
+    for (const [weaponId, magSize] of Object.entries(this.MAGAZINE_SIZES)) {
+      this.weapons.set(weaponId, {
+        currentAmmo: magSize,
+        reserveAmmo: this.MAX_RESERVE_AMMO[weaponId] || 0,
+        isReloading: false
+      });
+    }
+    
     this.setupEventListeners();
-
   }
 
   update(deltaTime: number): void {
@@ -68,9 +119,11 @@ export class WeaponUI implements IGameSystem {
     // Listen for weapon reloading
     this.scene.events.on('backend:weapon:reloaded', (data: any) => {
       if (data.weaponType in this.weapons) {
-        const weapon = this.weapons[data.weaponType as keyof PlayerWeapons];
-        weapon.isReloading = false;
-        // Backend will update ammo counts via game state
+        const weapon = this.weapons.get(data.weaponType);
+        if (weapon) {
+          weapon.isReloading = false;
+          // Backend will update ammo counts via game state
+        }
       }
     });
 
@@ -123,8 +176,10 @@ export class WeaponUI implements IGameSystem {
     // Listen for reload start (for immediate UI feedback)
     this.scene.events.on('weapon:reload', (data: any) => {
       if (data.weaponType in this.weapons) {
-        const weapon = this.weapons[data.weaponType as keyof PlayerWeapons];
-        weapon.isReloading = true;
+        const weapon = this.weapons.get(data.weaponType);
+        if (weapon) {
+          weapon.isReloading = true;
+        }
       }
     });
   }
@@ -140,7 +195,7 @@ export class WeaponUI implements IGameSystem {
   }
 
   private renderAmmoCounter(ctx: CanvasRenderingContext2D): void {
-    const weapon = this.weapons[this.currentWeapon as keyof PlayerWeapons];
+    const weapon = this.weapons.get(this.currentWeapon);
     if (!weapon) return;
 
     const x = GAME_CONFIG.GAME_WIDTH - 60;
@@ -169,10 +224,8 @@ export class WeaponUI implements IGameSystem {
     ctx.fillStyle = '#FFFFFF';
     ctx.textAlign = 'left';
     
-    // Show weapon name with key number
-    const weaponSlots = ['', '1-RIFLE', '2-PISTOL', '3-GRENADE', '4-ROCKET'];
-    const weaponIndex = this.getWeaponIndex(this.currentWeapon);
-    const displayText = weaponSlots[weaponIndex] || this.currentWeapon.toUpperCase();
+    // Show weapon name in uppercase
+    const displayText = this.currentWeapon.toUpperCase();
     
     ctx.fillText(displayText, x, y);
     
@@ -285,23 +338,21 @@ export class WeaponUI implements IGameSystem {
   }
 
   private getWeaponIndex(weaponName: string): number {
-    switch (weaponName) {
-      case 'rifle': return 1;
-      case 'pistol': return 2;
-      case 'grenade': return 3;
-      case 'rocket': return 4;
-      default: return 1;
-    }
+    // This method is no longer needed with dynamic weapons
+    // Return 0 for compatibility if still called somewhere
+    return 0;
   }
 
   // Public methods for updating UI state
   
   updateWeaponData(weaponType: string, currentAmmo: number, reserveAmmo: number, isReloading: boolean = false): void {
-    if (weaponType in this.weapons) {
-      const weapon = this.weapons[weaponType as keyof PlayerWeapons];
-      weapon.currentAmmo = currentAmmo;
-      weapon.reserveAmmo = reserveAmmo;
-      weapon.isReloading = isReloading;
+    if (this.weapons.has(weaponType)) {
+      const weapon = this.weapons.get(weaponType);
+      if (weapon) {
+        weapon.currentAmmo = currentAmmo;
+        weapon.reserveAmmo = reserveAmmo;
+        weapon.isReloading = isReloading;
+      }
     }
   }
 
@@ -324,7 +375,7 @@ export class WeaponUI implements IGameSystem {
   // Getter methods for GameScene
   
   getCurrentWeaponAmmo(): { current: number; reserve: number; isReloading: boolean } {
-    const weapon = this.weapons[this.currentWeapon as keyof PlayerWeapons];
+    const weapon = this.weapons.get(this.currentWeapon);
     if (!weapon) return { current: 0, reserve: 0, isReloading: false };
     return {
       current: weapon.currentAmmo,
@@ -351,9 +402,11 @@ export class WeaponUI implements IGameSystem {
 
   // Method to decrease ammo when firing (for local feedback)
   decreaseAmmo(weaponType: string, amount: number = 1): void {
-    if (weaponType in this.weapons) {
-      const weapon = this.weapons[weaponType as keyof PlayerWeapons];
-      weapon.currentAmmo = Math.max(0, weapon.currentAmmo - amount);
+    if (this.weapons.has(weaponType)) {
+      const weapon = this.weapons.get(weaponType);
+      if (weapon) {
+        weapon.currentAmmo = Math.max(0, weapon.currentAmmo - amount);
+      }
     }
   }
 
@@ -363,7 +416,7 @@ export class WeaponUI implements IGameSystem {
     return {
       health: this.health,
       currentWeapon: this.currentWeapon,
-      weapons: this.weapons,
+      weapons: Array.from(this.weapons.entries()),
       grenadeCharge: this.grenadeCharge,
       isADS: this.isADS
     };

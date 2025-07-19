@@ -16,6 +16,7 @@ export interface InputState {
     '2': boolean;
     '3': boolean;
     '4': boolean;
+    '5': boolean;
   };
   mouse: {
     x: number;
@@ -43,7 +44,7 @@ export class InputSystem implements IGameSystem {
   private lastInputState: InputState | null = null;
   
   // Weapon-related properties
-  private weaponSlots: (string | null)[] = [null, null, null, null]; // Will be filled from loadout
+  private weaponSlots: (string | null)[] = [null, null, null, null, null]; // Will be filled from loadout (0-5, 0 is unused)
   private currentWeapon: number = 1;
   private playerLoadout: PlayerLoadout | null = null;
   private isADS: boolean = false;
@@ -57,16 +58,50 @@ export class InputSystem implements IGameSystem {
   
   // Full-auto firing system
   private weaponRPM: { [key: string]: number } = {
-    rifle: 600,   // 600 rounds per minute (10 rounds per second)
-    pistol: 200,  // 200 rounds per minute (3.33 rounds per second) - semi-auto
-    rocket: 60,   // 60 rounds per minute (1 round per second)
-    grenade: 120  // 120 rounds per minute (2 rounds per second)
+    // Primary weapons
+    rifle: 600,              // 600 rounds per minute (10 rounds per second)
+    smg: 800,                // 800 rounds per minute (13.33 rounds per second)
+    shotgun: 120,            // 120 rounds per minute (2 rounds per second)
+    battlerifle: 450,        // 450 rounds per minute (7.5 rounds per second)
+    sniperrifle: 60,         // 60 rounds per minute (1 round per second)
+    
+    // Secondary weapons
+    pistol: 200,             // 200 rounds per minute (3.33 rounds per second)
+    revolver: 150,           // 150 rounds per minute (2.5 rounds per second)
+    suppressedpistol: 250,   // 250 rounds per minute (4.17 rounds per second)
+    
+    // Support weapons
+    rocket: 60,              // 60 rounds per minute (1 round per second)
+    grenade: 120,            // 120 rounds per minute (2 rounds per second)
+    grenadelauncher: 90,     // 90 rounds per minute (1.5 rounds per second)
+    machinegun: 600,         // 600 rounds per minute (10 rounds per second)
+    antimaterialrifle: 30,   // 30 rounds per minute (0.5 rounds per second)
+    
+    // Thrown weapons (not used for RPM but included for completeness)
+    smokegrenade: 120,       // Throw rate similar to grenade
+    flashbang: 120           // Throw rate similar to grenade
   };
   private weaponFireModes: { [key: string]: 'auto' | 'semi' } = {
+    // Primary weapons
     rifle: 'auto',
+    smg: 'auto',
+    shotgun: 'semi',
+    battlerifle: 'semi',    // Could be changed to 'burst' later
+    sniperrifle: 'semi',
+    
+    // Secondary weapons  
     pistol: 'semi',
+    revolver: 'semi',
+    suppressedpistol: 'semi',
+    
+    // Support weapons
     rocket: 'semi',
-    grenade: 'semi'
+    grenade: 'semi',
+    grenadelauncher: 'semi',
+    machinegun: 'auto',
+    antimaterialrifle: 'semi',
+    smokegrenade: 'semi',
+    flashbang: 'semi'
   };
   private isMouseHeld: boolean = false;
   private lastFireTime: number = 0;
@@ -87,7 +122,8 @@ export class InputSystem implements IGameSystem {
         '1': false,
         '2': false,
         '3': false,
-        '4': false
+        '4': false,
+        '5': false
       },
       mouse: { 
         x: 0, 
@@ -116,17 +152,17 @@ export class InputSystem implements IGameSystem {
     // Add secondary weapon (slot 2)
     this.weaponSlots[2] = loadout.secondary;
     
-    // Add support weapons (slots 3+)
+    // Add support weapons (slots 3-5)
     let slotIndex = 3;
     for (const supportWeapon of loadout.support) {
-      if (slotIndex <= 4) { // Max 4 weapon slots in current UI
+      if (slotIndex <= 5) { // Support weapons can use slots 3, 4, and 5
         this.weaponSlots[slotIndex] = supportWeapon;
         slotIndex++;
       }
     }
     
     // Fill remaining slots with null
-    while (slotIndex <= 4) {
+    while (slotIndex <= 5) {
       this.weaponSlots[slotIndex] = null;
       slotIndex++;
     }
@@ -160,7 +196,8 @@ export class InputSystem implements IGameSystem {
       one: Phaser.Input.Keyboard.KeyCodes.ONE,
       two: Phaser.Input.Keyboard.KeyCodes.TWO,
       three: Phaser.Input.Keyboard.KeyCodes.THREE,
-      four: Phaser.Input.Keyboard.KeyCodes.FOUR
+      four: Phaser.Input.Keyboard.KeyCodes.FOUR,
+      five: Phaser.Input.Keyboard.KeyCodes.FIVE
     });
 
     // Set up mouse input
@@ -181,10 +218,11 @@ export class InputSystem implements IGameSystem {
         this.inputState.mouse.leftPressed = true;
         this.isMouseHeld = true;
         
-        // Check if we should start grenade charging
+        // Check if we should start grenade/thrown weapon charging
         const weapon = this.weaponSlots[this.currentWeapon];
-        if (weapon === 'grenade' && this.grenadeChargeStart === 0) {
-          // Start grenade charging instead of immediate fire
+        const isThrownWeapon = weapon === 'grenade' || weapon === 'smokegrenade' || weapon === 'flashbang';
+        if (isThrownWeapon && this.grenadeChargeStart === 0) {
+          // Start charging for thrown weapons
           this.grenadeChargeStart = Date.now();
           this.isChargingGrenade = true;
         } else {
@@ -241,6 +279,7 @@ export class InputSystem implements IGameSystem {
     this.inputState.keys['2'] = this.keys.two.isDown;
     this.inputState.keys['3'] = this.keys.three.isDown;
     this.inputState.keys['4'] = this.keys.four.isDown;
+    this.inputState.keys['5'] = this.keys.five.isDown;
 
     // Handle weapon switching
     this.handleWeaponSwitching();
@@ -410,8 +449,9 @@ export class InputSystem implements IGameSystem {
     const weapon = this.weaponSlots[this.currentWeapon];
     if (!weapon) return;
     
-    // Skip if it's a grenade - handled by charging system
-    if (weapon === 'grenade') return;
+    // Skip if it's a thrown weapon - handled by charging system
+    const isThrownWeapon = weapon === 'grenade' || weapon === 'smokegrenade' || weapon === 'flashbang';
+    if (isThrownWeapon) return;
     
     // Check current ammo and trigger auto-reload if empty
     if (this.weaponUI) {
@@ -442,8 +482,8 @@ export class InputSystem implements IGameSystem {
     // Calculate target position for bullet trail
     const targetPosition = { x: this.inputState.mouse.x, y: this.inputState.mouse.y };
     
-    // Send weapon fire event to network system
-    this.scene.events.emit('weapon:fire', {
+    // Prepare weapon fire data
+    const fireData: any = {
       weaponType: weapon,
       position: this.playerPosition,
       targetPosition: targetPosition,
@@ -451,7 +491,18 @@ export class InputSystem implements IGameSystem {
       isADS: this.isADS,
       timestamp: Date.now(),
       sequence: this.sequence++
-    });
+    };
+    
+    // Add weapon-specific data
+    if (weapon === 'shotgun') {
+      fireData.pelletCount = 8; // Shotgun fires 8 pellets
+    }
+    
+    // Send weapon fire event to network system
+    this.scene.events.emit('weapon:fire', fireData);
+    
+    // Log weapon fire for debugging
+    console.log(`🔫 Firing ${weapon}:`, fireData);
     
     // Concise weapon fire logging
     
@@ -469,9 +520,9 @@ export class InputSystem implements IGameSystem {
   }
 
   private handleWeaponSwitching(): void {
-    // Check for weapon switching (1-4 keys)
-    for (let i = 1; i <= 4; i++) {
-      const keyPressed = this.inputState.keys[i.toString() as '1' | '2' | '3' | '4'];
+    // Check for weapon switching (1-5 keys)
+    for (let i = 1; i <= 5; i++) {
+      const keyPressed = this.inputState.keys[i.toString() as '1' | '2' | '3' | '4' | '5'];
       if (keyPressed && this.currentWeapon !== i) {
         this.switchWeapon(i);
         break;
@@ -517,6 +568,8 @@ export class InputSystem implements IGameSystem {
         weaponType: weapon,
         timestamp: Date.now()
       });
+      
+      console.log(`🔄 Reloading ${weapon}`);
     }
   }
 
@@ -537,12 +590,19 @@ export class InputSystem implements IGameSystem {
       toWeapon,
       timestamp: Date.now()
     });
+    
+    console.log(`🔄 Weapon switch: ${fromWeapon} → ${toWeapon}`);
   }
 
   private throwGrenade(): void {
-    // Calculate charge level
+    // Get current weapon
+    const currentWeapon = this.weaponSlots[this.currentWeapon];
+    
+    // Calculate charge level (only for grenades, not smoke/flash)
     const chargeDuration = Date.now() - this.grenadeChargeStart;
-    this.grenadeChargeLevel = Math.min(5, Math.floor(chargeDuration / 200) + 1);
+    this.grenadeChargeLevel = currentWeapon === 'grenade' 
+      ? Math.min(5, Math.floor(chargeDuration / 200) + 1)
+      : 1; // Smoke and flash don't have charge levels
     
     // Switch to grenade if using G key and not already selected
     const wasUsingGKey = !this.isChargingGrenade;
@@ -550,9 +610,12 @@ export class InputSystem implements IGameSystem {
       this.switchWeapon(3); // Switch to grenade slot
     }
     
+    // Get actual weapon being thrown
+    const thrownWeapon = this.weaponSlots[this.currentWeapon] || 'grenade';
+    
     // Decrease ammo locally for immediate feedback
     this.scene.events.emit('weapon:ammo:decrease', {
-      weaponType: 'grenade',
+      weaponType: thrownWeapon,
       amount: 1
     });
     
@@ -561,17 +624,20 @@ export class InputSystem implements IGameSystem {
     
     // Use weapon:fire event to ensure backend creates projectile tracking
     this.scene.events.emit('weapon:fire', {
-      weaponType: 'grenade',
+      weaponType: thrownWeapon,
       position: this.playerPosition,
       targetPosition: targetPosition,
       direction: this.playerRotation,
-      chargeLevel: this.grenadeChargeLevel, // Include charge level
+      chargeLevel: this.grenadeChargeLevel, // Include charge level (1 for smoke/flash)
       isADS: false,
       timestamp: Date.now(),
       sequence: this.sequence++
     });
     
-    
+    // Play throw sound
+    this.scene.events.emit('weapon:throw', {
+      weaponType: thrownWeapon
+    });
     
     // Reset charge state
     this.grenadeChargeStart = 0;
@@ -657,5 +723,10 @@ export class InputSystem implements IGameSystem {
       clearInterval(this.autoFireTimer);
       this.autoFireTimer = null;
     }
+  }
+
+  // Get the player's current weapon slots for debugging
+  getWeaponSlots(): (string | null)[] {
+    return [...this.weaponSlots];
   }
 } 

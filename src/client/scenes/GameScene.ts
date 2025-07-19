@@ -13,7 +13,7 @@ import { GameState, CollisionEvent, Vector2, PolygonVision } from '../../../shar
 
 import { AssetManager } from '../utils/AssetManager';
 import { audioManager } from '../systems/AudioManager';
-import { initializeGameAudio, fireWeapon, playUIClick } from '../systems/AudioIntegration';
+import { initializeGameAudio, fireWeapon, playUIClick, throwWeapon } from '../systems/AudioIntegration';
 import { audioTest } from '../systems/AudioTest';
 
 export class GameScene extends Phaser.Scene {
@@ -58,7 +58,7 @@ export class GameScene extends Phaser.Scene {
     console.log('GameScene: Initializing');
     
     // Get configured loadout from registry
-    const playerLoadout = this.registry.get('playerLoadout');
+    const playerLoadout = this.game.registry.get('playerLoadout');
     if (!playerLoadout) {
       console.error('GameScene: No player loadout configured! Returning to ConfigureScene.');
       this.scene.start('ConfigureScene');
@@ -76,7 +76,7 @@ export class GameScene extends Phaser.Scene {
     this.createFloorBackground();
 
     // Get configured loadout for weapon system
-    const playerLoadout = this.registry.get('playerLoadout');
+    const playerLoadout = this.game.registry.get('playerLoadout');
     
     // Initialize systems first (before using them)
     this.inputSystem = new InputSystem(this);
@@ -105,6 +105,9 @@ export class GameScene extends Phaser.Scene {
     
     // Initialize audio system
     this.initializeAudio();
+    
+    // Set up audio event listeners
+    this.setupAudioListeners();
     
     // Create player sprite using configured team
     const teamColor = playerLoadout?.team || 'blue'; // Fallback to blue if no team configured
@@ -191,12 +194,42 @@ export class GameScene extends Phaser.Scene {
 
     // Set up network event listeners
     this.setupNetworkListeners();
-
+    
     // Create debug UI elements
     this.createUI();
     
     // Add coordinate debug visualization
     this.addCoordinateDebug();
+    
+    // Send player join event with loadout when scene starts
+    if (this.networkSystem && this.networkSystem.isAuthenticated() && playerLoadout) {
+      console.log('🎮 GameScene: Sending player:join with loadout');
+      this.networkSystem.emit('player:join', {
+        loadout: playerLoadout,
+        timestamp: Date.now()
+      });
+      
+      // Failsafe: Send again after 1 second in case the first one was too early
+      this.time.delayedCall(1000, () => {
+        if (this.networkSystem && this.networkSystem.isAuthenticated()) {
+          console.log('🎮 GameScene: Sending player:join again (failsafe)');
+          this.networkSystem.emit('player:join', {
+            loadout: playerLoadout,
+            timestamp: Date.now()
+          });
+        }
+      });
+    }
+
+    // Add debug instructions to UI
+    const debugText = this.add.text(5, GAME_CONFIG.GAME_HEIGHT - 20, 
+      'Debug: P - toggle pos, B - bullets, N - network, L - loadout, J - join', {
+      fontSize: '7px',
+      color: '#666666'
+    }).setOrigin(0, 1);
+    
+    // Start game loop
+    console.log('GameScene created successfully');
   }
 
   update(time: number, delta: number): void {
@@ -1079,6 +1112,50 @@ export class GameScene extends Phaser.Scene {
        console.log('Watch the console as you move with WASD keys to see collision detection in action');
     });
 
+    // Network status debug - Press N key
+    this.input.keyboard!.on('keydown-N', () => {
+      const networkState = this.networkSystem.getConnectionState();
+      const socket = this.networkSystem.getSocket();
+      console.log('🌐 NETWORK STATUS:');
+      console.log('- Connection State:', networkState);
+      console.log('- Socket Connected:', socket?.connected);
+      console.log('- Socket ID:', socket?.id);
+      console.log('- Is Authenticated:', this.networkSystem.isAuthenticated());
+    });
+
+    // Debug key to manually send player:join - Press J
+    this.input.keyboard!.on('keydown-J', () => {
+      console.log('🎮 Manually sending player:join event');
+      const loadout = this.game.registry.get('playerLoadout');
+      if (loadout) {
+        console.log('📤 Sending loadout:', loadout);
+        this.networkSystem.emit('player:join', {
+          loadout: loadout,
+          timestamp: Date.now()
+        });
+      } else {
+        console.log('❌ No loadout found in game registry!');
+      }
+    });
+
+    // Debug key to check loadout - Press L
+    this.input.keyboard!.on('keydown-L', () => {
+      console.log('🎮 CURRENT LOADOUT CHECK:');
+      const loadout = this.game.registry.get('playerLoadout');
+      if (loadout) {
+        console.log('- Team:', loadout.team);
+        console.log('- Primary:', loadout.primary);
+        console.log('- Secondary:', loadout.secondary);
+        console.log('- Support:', loadout.support);
+        console.log('- Full loadout object:', loadout);
+      } else {
+        console.log('❌ No loadout found in game registry!');
+      }
+      
+      // Also check weapon slots in InputSystem
+      const weaponSlots = this.inputSystem.getWeaponSlots();
+      console.log('- InputSystem weapon slots:', weaponSlots);
+    });
   }
 
 
@@ -1154,6 +1231,20 @@ export class GameScene extends Phaser.Scene {
     this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
       const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
       mouseText.setText(`Mouse: (${worldPoint.x.toFixed(0)}, ${worldPoint.y.toFixed(0)})`);
+    });
+  }
+
+  private setupAudioListeners(): void {
+    // Listen for weapon firing
+    this.events.on('weapon:fire', (data: any) => {
+      // Play weapon fire sound
+      fireWeapon(data.weaponType, data.position);
+    });
+    
+    // Listen for weapon throwing
+    this.events.on('weapon:throw', (data: any) => {
+      // Play throw sound
+      throwWeapon(data.weaponType);
     });
   }
 

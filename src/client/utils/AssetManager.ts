@@ -170,15 +170,51 @@ export class AssetManager {
     return sprite;
   }
 
-  // Show muzzle flash (for all weapons except grenade) - Fixed direction
+  // Show muzzle flash (for all weapons except thrown) - Fixed direction
   showMuzzleFlash(x: number, y: number, angle: number, weaponType: string): Phaser.GameObjects.Sprite | null {
-    // No muzzle flash for grenades as specified
-    if (weaponType === 'grenade') {
+    // No muzzle flash for thrown weapons
+    if (weaponType === 'grenade' || weaponType === 'smokegrenade' || weaponType === 'flashbang') {
       return null;
     }
     
     const flash = this.scene.add.sprite(x, y, 'muzzle_flash');
-    flash.setScale(this.SCALES.MUZZLE_FLASH);
+    
+    // Weapon-specific muzzle flash settings
+    let scale = this.SCALES.MUZZLE_FLASH;
+    let duration = 120;
+    let tint = 0xFFFFFF; // Default white
+    
+    switch (weaponType) {
+      case 'smg':
+        scale *= 0.7; // Smaller flash
+        duration = 80; // Shorter duration
+        break;
+      case 'shotgun':
+        scale *= 1.5; // Larger flash
+        tint = 0xFFAA00; // Orange tint
+        break;
+      case 'sniperrifle':
+      case 'antimaterialrifle':
+        scale *= 1.3; // Larger flash
+        duration = 150; // Longer duration
+        break;
+      case 'machinegun':
+        scale *= 1.1;
+        tint = 0xFFFF88; // Slight yellow
+        break;
+      case 'suppressedpistol':
+        scale *= 0.4; // Much smaller flash
+        duration = 60; // Very brief
+        tint = 0x888888; // Darker/grayer
+        break;
+      case 'grenadelauncher':
+        scale *= 1.2;
+        tint = 0xFFCC00; // Orange flash
+        break;
+    }
+    
+    flash.setScale(scale);
+    flash.setTint(tint);
     flash.setFlipX(true); // Flip horizontally to point in correct direction
     flash.setRotation(angle); // Point in shooting direction
     flash.setDepth(55); // Above players but below UI
@@ -207,7 +243,7 @@ export class AssetManager {
       targets: flash,
       alpha: 0,
       scale: flash.scale * 1.2, // Slight expansion
-      duration: 120,
+      duration: duration,
       ease: 'Power2',
       onComplete: () => flash.destroy()
     });

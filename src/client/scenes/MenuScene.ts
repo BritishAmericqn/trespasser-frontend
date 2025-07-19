@@ -79,7 +79,7 @@ export class MenuScene extends Phaser.Scene {
     }).setOrigin(0.5);
     
     // Check if loadout is configured
-    const savedLoadout = this.registry.get('playerLoadout');
+    const savedLoadout = this.game.registry.get('playerLoadout');
     if (savedLoadout) {
       const primary = savedLoadout.primary || 'None';
       const team = savedLoadout.team || 'None';
