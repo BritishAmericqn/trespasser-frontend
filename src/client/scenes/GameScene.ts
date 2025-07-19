@@ -29,7 +29,12 @@ export class GameScene extends Phaser.Scene {
   private assetManager!: AssetManager;
   private playerSprite!: Phaser.GameObjects.Sprite; // Changed from Rectangle to Sprite
   private playerWeapon!: Phaser.GameObjects.Sprite; // Add weapon sprite
-  private playerPosition: { x: number; y: number };
+  // Player state tracking
+  private playerPosition: { x: number; y: number } = { x: 240, y: 135 };
+  private lastGameStateTime: number = 0;
+  // Server indicator debug functionality removed
+  private isPlayerDead: boolean = false; // Track if local player is dead
+  private localPlayerId: string | null = null; // Track local player ID
   private playerRotation: number = 0;
   private connectionStatus!: Phaser.GameObjects.Text;
   
@@ -43,9 +48,7 @@ export class GameScene extends Phaser.Scene {
   private wallSliceSprites: Map<string, Phaser.GameObjects.Sprite> = new Map(); // Back to regular Sprite
   private floorSprites: Phaser.GameObjects.Sprite[] = [];
   private debugOverlay!: Phaser.GameObjects.Text;
-  private lastGameStateTime: number = 0;
   // Server position indicator visibility flag
-  private showServerIndicator: boolean = false;
 
 
   constructor() {
@@ -109,8 +112,12 @@ export class GameScene extends Phaser.Scene {
     // Set up audio event listeners
     this.setupAudioListeners();
     
-    // Create player sprite using configured team
+    // Create local player sprite with configured loadout
     const teamColor = playerLoadout?.team || 'blue'; // Fallback to blue if no team configured
+    
+    // Debug log to verify team assignment
+    console.log(`🎨 Creating local player with team: ${teamColor} (from loadout: ${playerLoadout?.team})`);
+    
     this.playerSprite = this.assetManager.createPlayer(
       this.playerPosition.x,
       this.playerPosition.y,
@@ -132,19 +139,7 @@ export class GameScene extends Phaser.Scene {
     // Initialize client prediction with starting position
     this.clientPrediction.reset(this.playerPosition);
     
-    // Create backend position indicator (red outline square) - HIDDEN by default
-    const backendIndicator = this.add.rectangle(
-      this.playerPosition.x,
-      this.playerPosition.y,
-      22,
-      22
-    );
-    backendIndicator.setStrokeStyle(2, 0xff0000);
-    backendIndicator.setDepth(5);
-    backendIndicator.setVisible(this.showServerIndicator); // Hidden by default
-    
-    // Store reference for updating
-    (this as any).backendIndicator = backendIndicator;
+    // Backend position indicator removed (was debug functionality)
 
     // Create connection status text
     this.connectionStatus = this.add.text(GAME_CONFIG.GAME_WIDTH - 5, 5, 'Connecting...', {
@@ -595,6 +590,40 @@ export class GameScene extends Phaser.Scene {
       console.log('GameScene: Game ready event received');
     });
 
+    // Set up network authentication
+    this.events.on('network:authenticated', (data: any) => {
+      console.log('🎮 GameScene: Authentication successful, preparing to join game');
+      
+      // Set local player ID for proper identification
+      const socketId = this.networkSystem.getSocket()?.id;
+      if (socketId) {
+        this.setLocalPlayerId(socketId);
+      }
+      
+      // Wait a moment for the backend to be ready, then send player:join
+      this.time.delayedCall(500, () => {
+        const loadout = this.game.registry.get('playerLoadout');
+        if (loadout) {
+          console.log('🎮 GameScene: Sending player:join with loadout');
+          this.networkSystem.emit('player:join', {
+            loadout: loadout,
+            timestamp: Date.now()
+          });
+          
+          // Failsafe: Send again after another delay
+          this.time.delayedCall(1000, () => {
+            console.log('🎮 GameScene: Sending player:join again (failsafe)');
+            this.networkSystem.emit('player:join', {
+              loadout: loadout,
+              timestamp: Date.now()
+            });
+          });
+        } else {
+          console.error('❌ No loadout found when trying to join game!');
+        }
+      });
+    });
+
     // Game state updates from server
     this.events.on('network:gameState', (gameState: GameState) => {
       this.lastGameStateTime = Date.now();
@@ -687,13 +716,23 @@ export class GameScene extends Phaser.Scene {
             continue;
           }
           
+          // Debug log team data (10% of updates to avoid spam)
+          if (Math.random() < 0.1) {
+            console.log(`🎨 Player ${id} team data: backend=${p.team} final=${p.team || 'blue'}`);
+          }
+          
           // Fix position format
           fixedPlayers[id] = {
             ...p,
             position: p.transform?.position || p.position || { x: 0, y: 0 },
             velocity: p.velocity || { x: 0, y: 0 },
-            team: p.team || 'red',
-            health: p.health !== undefined ? p.health : 100
+            team: p.team || 'blue',  // Changed from 'red' to 'blue' for consistency
+            health: p.health !== undefined ? p.health : 100,
+            // IMPORTANT: Preserve rotation data for proper player facing direction
+            rotation: p.rotation,
+            direction: p.direction,
+            mouseAngle: p.mouseAngle,
+            angle: p.angle
           };
         }
         
@@ -730,13 +769,7 @@ export class GameScene extends Phaser.Scene {
             serverPos = { x: (serverPlayer as any).x, y: (serverPlayer as any).y };
           }
           
-          // Update backend indicator
-          if (serverPos) {
-            const backendIndicator = (this as any).backendIndicator;
-            if (backendIndicator) {
-              backendIndicator.setPosition(serverPos.x, serverPos.y);
-            }
-          }
+          // Backend indicator removed
           
           // Update our health from game state (authoritative)
           if ((serverPlayer as any).health !== undefined) {
@@ -817,22 +850,12 @@ export class GameScene extends Phaser.Scene {
       }
     });
 
-    // Player join/leave events
-    this.events.on('network:playerJoined', (playerData: any) => {
-
-    });
-
-    this.events.on('network:playerLeft', (playerData: any) => {
-
-    });
+    // Player join/leave events - now handled in lifecycle section below
 
     // Listen for backend position updates
     this.events.on('backend:weapon:fired', (data: any) => {
       if (data.position) {
-        const backendIndicator = (this as any).backendIndicator;
-        if (backendIndicator) {
-          backendIndicator.setPosition(data.position.x, data.position.y);
-        }
+        // Backend indicator removed
         
         // Also sync our player position when backend sends position data
         this.applyBackendPosition(data.position);
@@ -851,6 +874,349 @@ export class GameScene extends Phaser.Scene {
         this.applyBackendPosition(data.position);
       }
     });
+
+    // All debug functionality removed except F key fog toggle
+
+    // ===== PLAYER LIFECYCLE EVENT HANDLERS =====
+    
+    // Handle player death events (new death system)
+    this.events.on('backend:player:died', (data: any) => {
+      console.log('💀 Player died event received:', data);
+      
+      const localSocketId = this.networkSystem.getSocket()?.id;
+      if (data.playerId === localSocketId) {
+        console.log('💀 Local player died!');
+        this.handleLocalPlayerDeath(data);
+      } else {
+        console.log(`💀 Other player died: ${data.playerId}`);
+        // Handle other player death - show as corpse in PlayerManager
+        this.playerManager.handlePlayerDeath(data.playerId, data.position);
+      }
+    });
+
+    // Handle player respawn events (new respawn system)
+    this.events.on('backend:player:respawned', (data: any) => {
+      console.log('✨ Player respawned event received:', data);
+      
+      const localSocketId = this.networkSystem.getSocket()?.id;
+      if (data.playerId === localSocketId) {
+        console.log('✨ Local player respawned!');
+        this.handleLocalPlayerRespawn(data);
+      } else {
+        console.log(`✨ Other player respawned: ${data.playerId}`);
+        // Handle other player respawn in PlayerManager
+        this.playerManager.handlePlayerRespawn(data.playerId, data.position, data.invulnerableUntil);
+      }
+    });
+
+    // LEGACY: Handle local player death from kill events (keep for compatibility)
+    this.events.on('backend:player:killed', (data: any) => {
+      console.log('💀 Player killed event received (legacy):', data);
+      
+      // Check if it's the local player who died
+      const localSocketId = this.networkSystem.getSocket()?.id;
+      if (data.playerId === localSocketId) {
+        console.log('💀 Local player has died (legacy)!');
+        this.handleLocalPlayerDeath(data);
+      } else {
+        console.log(`💀 Other player died (legacy): ${data.playerId}`);
+        // Handle other player death (remove from view, etc.)
+        this.playerManager.removePlayer(data.playerId);
+      }
+    });
+
+    // Handle new players joining
+    this.events.on('network:playerJoined', (data: any) => {
+      console.log('👥 New player joined:', data);
+      
+      // Ensure the new player gets rendered if they're visible
+      if (data.playerState) {
+        // Convert single player to map format that updatePlayers expects
+        const playerMap = new Map();
+        playerMap.set(data.playerId || data.id, data.playerState);
+        this.playerManager.updatePlayers(playerMap);
+      } else if (data.id && data.position) {
+        // Fallback: construct player state from raw data
+        const playerState = {
+          id: data.id,
+          position: data.position,
+          health: data.health || 100,
+          team: data.team || data.loadout?.team || 'blue'  // Try to get team from multiple sources
+        };
+        console.log(`🎨 New player ${data.id} joined with team: ${playerState.team}`);
+        const playerMap = new Map();
+        playerMap.set(data.id, playerState);
+        this.playerManager.updatePlayers(playerMap);
+      } else {
+        console.warn('⚠️ Player joined but missing playerState or position data:', data);
+      }
+      
+      // Failsafe: Force a game state update after a short delay to catch any missed players
+      this.time.delayedCall(500, () => {
+        console.log('🔄 Requesting fresh game state after player join');
+        this.networkSystem.emit('request:gamestate');
+      });
+    });
+
+    // Handle players leaving
+    this.events.on('network:playerLeft', (data: any) => {
+      console.log('👋 Player left:', data);
+      
+      // Remove the player from view
+      if (data.playerId || data.id) {
+        this.playerManager.removePlayer(data.playerId || data.id);
+      }
+    });
+
+    // Handle player damage events
+    this.events.on('backend:player:damaged', (data: any) => {
+      const localSocketId = this.networkSystem.getSocket()?.id;
+      
+      if (data.playerId === localSocketId) {
+        // Local player took damage
+        if (data.newHealth !== undefined) {
+          this.weaponUI.updateHealth(data.newHealth);
+          
+          // Check if health reached zero (death)
+          if (data.newHealth <= 0) {
+            this.isPlayerDead = true;
+            console.log('💀 Local player health reached 0 - marking as dead');
+          }
+        }
+        
+        // Screen shake for local player damage
+        if (data.damage && data.damage > 0) {
+          const intensity = Math.min(data.damage / 20, 1); // Scale based on damage
+          this.screenShakeSystem.customShake(150, intensity * 0.02, 'damage');
+        }
+      }
+    });
+
+    // Handle player rotation/direction updates (if backend sends them)
+    this.events.on('backend:player:rotated', (data: any) => {
+      // Update player manager directly with rotation data
+      console.log(`🎯 Received rotation update for player ${data.playerId}: ${data.rotation}`);
+    });
+
+  }
+
+  /**
+   * Handle local player death - show death screen but keep connected
+   */
+  private handleLocalPlayerDeath(deathData: any): void {
+    this.isPlayerDead = true;
+    
+    // Prevent all input from dead player
+    if (this.inputSystem) {
+      this.inputSystem.setPlayerDead(true);
+    }
+    
+    // Show death screen with respawn functionality
+    this.showDeathScreen(deathData.killerId || 'Unknown', deathData.damageType || 'damage', deathData.position);
+  }
+
+  /**
+   * Show death screen UI with respawn options
+   */
+  private showDeathScreen(killerId: string, damageType: string, deathPosition: any): void {
+    // Create death overlay container
+    const deathContainer = this.add.container(GAME_CONFIG.GAME_WIDTH / 2, GAME_CONFIG.GAME_HEIGHT / 2);
+    deathContainer.setDepth(1000);
+    (this as any).deathContainer = deathContainer; // Store reference for cleanup
+    
+    // Background overlay
+    const overlay = this.add.rectangle(0, 0, GAME_CONFIG.GAME_WIDTH, GAME_CONFIG.GAME_HEIGHT, 0x000000, 0.7);
+    deathContainer.add(overlay);
+    
+    // Death message
+    const deathText = this.add.text(0, -60, 'YOU DIED', {
+      fontSize: '24px',
+      color: '#ff0000',
+      align: 'center'
+    });
+    deathText.setOrigin(0.5);
+    deathContainer.add(deathText);
+    
+    // Killer info
+    const killerText = this.add.text(0, -20, `Killed by ${killerId}`, {
+      fontSize: '14px',
+      color: '#ffffff',
+      align: 'center'
+    });
+    killerText.setOrigin(0.5);
+    deathContainer.add(killerText);
+    
+    // Respawn instructions (initially hidden)
+    const respawnText = this.add.text(0, 20, 'Press SPACE or ENTER to respawn', {
+      fontSize: '12px',
+      color: '#00ff00',
+      align: 'center'
+    });
+    respawnText.setOrigin(0.5);
+    respawnText.setAlpha(0);
+    deathContainer.add(respawnText);
+    
+    // Auto-respawn countdown
+    const countdownText = this.add.text(0, 50, '', {
+      fontSize: '10px',
+      color: '#ffff00',
+      align: 'center'
+    });
+    countdownText.setOrigin(0.5);
+    deathContainer.add(countdownText);
+    
+    // Fade in death screen
+    deathContainer.setAlpha(0);
+    this.tweens.add({
+      targets: deathContainer,
+      alpha: 1,
+      duration: 500,
+      ease: 'Power2'
+    });
+    
+    // Show respawn button after 3 seconds
+    this.time.delayedCall(3000, () => {
+      this.tweens.add({
+        targets: respawnText,
+        alpha: 1,
+        duration: 300
+      });
+      
+      // Enable manual respawn
+      (this as any).canRespawn = true;
+    });
+    
+    // Auto-respawn countdown (5 seconds total)
+    let timeLeft = 5;
+    const countdownTimer = this.time.addEvent({
+      delay: 1000,
+      repeat: 4,
+      callback: () => {
+        timeLeft--;
+        if (timeLeft > 0) {
+          countdownText.setText(`Auto-respawn in ${timeLeft}s`);
+        } else {
+          countdownText.setText('');
+          // Auto-respawn if not manually respawned
+          if (this.isPlayerDead) {
+            this.requestRespawn();
+          }
+        }
+      }
+    });
+    
+    // Store timer reference for cleanup
+    (this as any).respawnTimer = countdownTimer;
+  }
+
+  /**
+   * Request respawn from backend
+   */
+  private requestRespawn(): void {
+    console.log('🔄 Requesting respawn');
+    this.networkSystem.emit('player:respawn');
+  }
+
+  /**
+   * Hide death screen when respawned
+   */
+  private hideDeathScreen(): void {
+    const deathContainer = (this as any).deathContainer;
+    if (deathContainer) {
+      this.tweens.add({
+        targets: deathContainer,
+        alpha: 0,
+        duration: 300,
+        onComplete: () => {
+          deathContainer.destroy();
+          (this as any).deathContainer = null;
+        }
+      });
+    }
+    
+    // Clear respawn timer
+    const respawnTimer = (this as any).respawnTimer;
+    if (respawnTimer) {
+      respawnTimer.remove();
+      (this as any).respawnTimer = null;
+    }
+    
+    // Clear respawn flag
+    (this as any).canRespawn = false;
+  }
+
+  /**
+   * Handle local player respawn - restore input and hide death screen
+   */
+  private handleLocalPlayerRespawn(respawnData: any): void {
+    this.isPlayerDead = false;
+    
+    // Restore input for alive player
+    if (this.inputSystem) {
+      this.inputSystem.setPlayerDead(false);
+    }
+    
+    // Hide death screen
+    this.hideDeathScreen();
+    
+    // Show invulnerability effect if specified
+    if (respawnData.invulnerableUntil) {
+      this.showInvulnerabilityEffect(respawnData.invulnerableUntil);
+    }
+    
+    // Update player health to full
+    if (this.weaponUI) {
+      this.weaponUI.updateHealth(100);
+    }
+    
+    console.log('✨ Local player respawned successfully');
+  }
+
+  /**
+   * Show invulnerability effect for newly respawned player
+   */
+  private showInvulnerabilityEffect(invulnerableUntil: number): void {
+    const duration = invulnerableUntil - Date.now();
+    if (duration <= 0) return;
+    
+    console.log(`🛡️ Showing invulnerability effect for ${duration}ms`);
+    
+    // Flash effect on local player sprite
+    const flashTween = this.tweens.add({
+      targets: this.playerSprite,
+      alpha: { from: 1, to: 0.3 },
+      duration: 200,
+      yoyo: true,
+      repeat: Math.floor(duration / 400), // Flash every 400ms
+      ease: 'Power2'
+    });
+    
+    // Clean up after invulnerability expires
+    this.time.delayedCall(duration, () => {
+      if (flashTween.isPlaying()) {
+        flashTween.stop();
+      }
+      this.playerSprite.setAlpha(1);
+      console.log('🛡️ Invulnerability effect ended');
+    });
+  }
+
+  /**
+   * Set the local player ID for proper identification
+   */
+  setLocalPlayerId(playerId: string): void {
+    this.localPlayerId = playerId;
+    console.log(`🎮 Local player ID set to: ${playerId}`);
+    
+    // Pass to PlayerManager for proper local player identification
+    this.playerManager.setLocalPlayerId(playerId);
+  }
+
+  /**
+   * Get local player death state
+   */
+  isLocalPlayerDead(): boolean {
+    return this.isPlayerDead;
   }
   
   private applyBackendPosition(serverPos: { x: number, y: number }): void {
@@ -860,10 +1226,7 @@ export class GameScene extends Phaser.Scene {
 
     
     // Update backend indicator
-    const backendIndicator = (this as any).backendIndicator;
-    if (backendIndicator) {
-      backendIndicator.setPosition(serverPos.x, serverPos.y);
-    }
+    // Backend indicator removed
     
     // Apply position correction
     if (drift > 50) {
@@ -981,7 +1344,7 @@ export class GameScene extends Phaser.Scene {
           `Pos: ${this.playerPosition.x.toFixed(0)},${this.playerPosition.y.toFixed(0)} | Move: ${(speed * 100).toFixed(0)}%`,
           `Wpn: ${currentWeapon || 'None'} ${isADS ? 'ADS' : ''} | Gren: ${grenadeCharge}/5`,
           `FX: F${effectCounts.muzzleFlashes} E${effectCounts.explosions} H${effectCounts.hitMarkers} P${effectCounts.particles}`,
-          `Keys: F=Toggle Fog | O=Server Pos | V=Debug Vision | C=Collision Debug | K=Screen Shake | T=Test Shake`
+          `Keys: F=Toggle Fog`
         ].join('\n'));
       }
     });
@@ -998,225 +1361,9 @@ export class GameScene extends Phaser.Scene {
       }
     });
 
-    // Toggle server position indicator with 'O' key
-    this.input.keyboard!.on('keydown-O', () => {
-      this.showServerIndicator = !this.showServerIndicator;
-      const backendIndicator = (this as any).backendIndicator;
-      if (backendIndicator) {
-        backendIndicator.setVisible(this.showServerIndicator);
-        console.log(`🔴 Server position indicator: ${this.showServerIndicator ? 'visible' : 'hidden'}`);
-      }
-    });
+    // Debug functionality removed - only fog toggle (F key) remains
 
-    // Toggle screen shake with 'K' key (for configuring)
-    this.input.keyboard!.on('keydown-K', () => {
-      const isEnabled = this.screenShakeSystem.toggleEnabled();
-      console.log(`📳 Screen shake toggled: ${isEnabled ? 'ON' : 'OFF'}`);
-    });
-
-    // Test screen shake with 'T' key
-    this.input.keyboard!.on('keydown-T', () => {
-      console.log('📳 Testing screen shake...');
-      this.screenShakeSystem.customShake(200, 0.01, 'test');
-    });
-
-    // Test explosion animation - click to explode (for testing assets)
-    this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
-      if (pointer.rightButtonDown()) {
-        const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
-        this.visualEffectsSystem.showExplosionEffect(worldPoint, 40);
-      }
-    });
-    
-    // Debug vertical walls - Press V key
-    this.input.keyboard!.on('keydown-V', () => {
-      console.log('🔍 WALL DEBUG (Backend-compliant)');
-      console.log('=================================');
-      const walls = this.destructionRenderer.getWallsData(false);
-      
-      walls.forEach(wall => {
-        const maskPattern = wall.destructionMask.join('');
-        const visibleSlices = wall.destructionMask.map((d, i) => d === 0 ? i : null).filter(i => i !== null);
-        const isPillar = wall.width === 10 && wall.height === 10;
-        
-        console.log(`Wall ${wall.id}:`, {
-          position: `(${wall.position.x}, ${wall.position.y})`,
-          size: `${wall.width}x${wall.height}`,
-          orientation: wall.orientation,
-          isPillar: isPillar,
-          destructionMask: maskPattern,
-          visibleSlices: visibleSlices,
-          material: wall.material,
-          slicePositions: wall.destructionMask.map((d, i) => {
-            if (isPillar) {
-              return {
-                slice: i,
-                y: wall.position.y + (i * 2),
-                height: 2,
-                destroyed: d === 1
-              };
-            } else if (wall.orientation === 'horizontal') {
-              return {
-                slice: i,
-                x: wall.position.x + (i * wall.width / 5),
-                width: wall.width / 5,
-                destroyed: d === 1
-              };
-            } else {
-              return {
-                slice: i,
-                y: wall.position.y + (i * wall.height / 5),
-                height: wall.height / 5,
-                destroyed: d === 1
-              };
-            }
-          })
-        });
-      });
-      
-      if (walls.length === 0) {
-        console.log('No walls found!');
-      }
-    });
-    
-    // Enhanced polygon debugging - Press G key
-    this.input.keyboard!.on('keydown-G', () => {
-      console.log('🔺 ENHANCED POLYGON DEBUG');
-      console.log('========================');
-      
-      const polygon = this.visionRenderer.getCurrentPolygon();
-      if (!polygon || polygon.length === 0) {
-        console.log('❌ No polygon data available');
-        return;
-      }
-      
-      console.log(`📊 Polygon Analysis: ${polygon.length} vertices`);
-      
-      // Log each vertex with detailed analysis
-      polygon.forEach((vertex, i) => {
-        const prev = polygon[i === 0 ? polygon.length - 1 : i - 1];
-        const next = polygon[(i + 1) % polygon.length];
-        
-        const prevDist = prev ? Math.sqrt(Math.pow(vertex.x - prev.x, 2) + Math.pow(vertex.y - prev.y, 2)) : 0;
-        const nextDist = next ? Math.sqrt(Math.pow(next.x - vertex.x, 2) + Math.pow(next.y - vertex.y, 2)) : 0;
-        
-        const angle = prev && next ? 
-          Math.atan2(next.y - vertex.y, next.x - vertex.x) - Math.atan2(prev.y - vertex.y, prev.x - vertex.x) : 0;
-        const angleDeg = angle * 180 / Math.PI;
-        
-        console.log(`  Vertex ${i}: (${vertex.x.toFixed(1)}, ${vertex.y.toFixed(1)}) | ` +
-                   `Distances: ${prevDist.toFixed(1)}px ← → ${nextDist.toFixed(1)}px | ` +
-                   `Angle: ${angleDeg.toFixed(1)}°` +
-                   (nextDist > 50 ? ' ⚠️ LARGE GAP' : '') +
-                   (Math.abs(angleDeg) < 5 ? ' ⚠️ STRAIGHT LINE' : ''));
-      });
-      
-      // Check for potential issues
-      const largeGaps = polygon.filter((vertex, i) => {
-        const next = polygon[(i + 1) % polygon.length];
-        if (!next) return false;
-        const dist = Math.sqrt(Math.pow(next.x - vertex.x, 2) + Math.pow(next.y - vertex.y, 2));
-        return dist > 50;
-      });
-      
-      const duplicates = polygon.filter((vertex, i) => {
-        const next = polygon[(i + 1) % polygon.length];
-        if (!next) return false;
-        return Math.abs(vertex.x - next.x) < 0.1 && Math.abs(vertex.y - next.y) < 0.1;
-      });
-      
-      if (largeGaps.length > 0) {
-        console.warn(`⚠️ Found ${largeGaps.length} large gaps between vertices`);
-      }
-      
-      if (duplicates.length > 0) {
-        console.warn(`⚠️ Found ${duplicates.length} duplicate/very close vertices`);
-      }
-      
-      // Toggle detailed visualization
-      const visionRenderer = this.visionRenderer as any;
-      visionRenderer.detailedDebug = !visionRenderer.detailedDebug;
-      console.log(`🔍 Detailed debug visualization: ${visionRenderer.detailedDebug ? 'ON' : 'OFF'}`);
-      console.log('💡 Look for numbered vertices and red lines indicating large gaps');
-    });
-
-    // Debug collision system - Press C key
-    this.input.keyboard!.on('keydown-C', () => {
-      console.log('🎯 COLLISION DEBUG');
-      console.log('==================');
-      
-      const currentPos = this.playerPosition;
-      const collisionDebug = this.clientPrediction.getDebugInfo().collisionDebug;
-      
-      console.log(`Player position: (${currentPos.x.toFixed(1)}, ${currentPos.y.toFixed(1)})`);
-      console.log(`Has collision: ${collisionDebug.hasCollision}`);
-      
-      if (collisionDebug.hasCollision) {
-        console.log(`Colliding walls:`);
-        collisionDebug.collisions.forEach((collision: any) => {
-          console.log(`  - ${collision.wallId}: ${collision.position.x},${collision.position.y} (${collision.size.width}x${collision.size.height}) ${collision.orientation} [${collision.destructionMask}]`);
-        });
-      } else {
-        console.log('No wall collisions at current position');
-      }
-      
-      // Test movement in all directions
-      const testDistance = 10;
-      const directions = [
-        { name: 'North', dx: 0, dy: -testDistance },
-        { name: 'South', dx: 0, dy: testDistance },
-        { name: 'East', dx: testDistance, dy: 0 },
-        { name: 'West', dx: -testDistance, dy: 0 }
-      ];
-      
-             console.log('\nMovement test results will show when you try to move in each direction');
-       console.log('Watch the console as you move with WASD keys to see collision detection in action');
-    });
-
-    // Network status debug - Press N key
-    this.input.keyboard!.on('keydown-N', () => {
-      const networkState = this.networkSystem.getConnectionState();
-      const socket = this.networkSystem.getSocket();
-      console.log('🌐 NETWORK STATUS:');
-      console.log('- Connection State:', networkState);
-      console.log('- Socket Connected:', socket?.connected);
-      console.log('- Socket ID:', socket?.id);
-      console.log('- Is Authenticated:', this.networkSystem.isAuthenticated());
-    });
-
-    // Debug key to manually send player:join - Press J
-    this.input.keyboard!.on('keydown-J', () => {
-      console.log('🎮 Manually sending player:join event');
-      const loadout = this.game.registry.get('playerLoadout');
-      if (loadout) {
-        console.log('📤 Sending loadout:', loadout);
-        this.networkSystem.emit('player:join', {
-          loadout: loadout,
-          timestamp: Date.now()
-        });
-      } else {
-        console.log('❌ No loadout found in game registry!');
-      }
-    });
-
-    // Debug key to check loadout - Press L
-    this.input.keyboard!.on('keydown-L', () => {
-      console.log('🎮 CURRENT LOADOUT CHECK:');
-      const loadout = this.game.registry.get('playerLoadout');
-      if (loadout) {
-        console.log('- Team:', loadout.team);
-        console.log('- Primary:', loadout.primary);
-        console.log('- Secondary:', loadout.secondary);
-        console.log('- Support:', loadout.support);
-        console.log('- Full loadout object:', loadout);
-      } else {
-        console.log('❌ No loadout found in game registry!');
-      }
-      
-      // Also check weapon slots in InputSystem
-      const weaponSlots = this.inputSystem.getWeaponSlots();
-      console.log('- InputSystem weapon slots:', weaponSlots);
-    });
+    // All debug functionality removed except F key fog toggle
 
   }
 

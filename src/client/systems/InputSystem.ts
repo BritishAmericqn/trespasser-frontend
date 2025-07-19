@@ -39,9 +39,12 @@ export class InputSystem implements IGameSystem {
   private sequence: number = 0;
   private networkTimer: number = 0;
   private readonly NETWORK_RATE = 1000 / 60; // 60 times per second (16.67ms)
+  // Player state
   private playerPosition: { x: number; y: number } = { x: 240, y: 135 }; // Default center
   private playerRotation: number = 0; // Player's current rotation in radians
   private lastInputState: InputState | null = null;
+  private isPlayerDead: boolean = false; // Track if player is dead
+  private lastRespawnRequest: number = 0; // Prevent respawn spam
   
   // Weapon-related properties
   private weaponSlots: (string | null)[] = [null, null, null, null, null]; // Will be filled from loadout (0-5, 0 is unused)
@@ -266,6 +269,14 @@ export class InputSystem implements IGameSystem {
   }
 
   update(deltaTime: number): void {
+    // Handle spectator input if player is dead
+    if (this.isPlayerDead) {
+      this.handleSpectatorInput();
+      return;
+    }
+    
+    // Normal alive player input processing below...
+    
     // Update key states
     this.inputState.keys.w = this.keys.w.isDown;
     this.inputState.keys.a = this.keys.a.isDown;
@@ -446,6 +457,12 @@ export class InputSystem implements IGameSystem {
   // ===== WEAPON HANDLING METHODS =====
   
   private handleWeaponFire(): void {
+    // Prevent dead players from firing
+    if (this.isPlayerDead) {
+      console.log('💀 Dead player attempted to fire - blocked');
+      return;
+    }
+    
     const weapon = this.weaponSlots[this.currentWeapon];
     if (!weapon) return;
     
@@ -746,6 +763,73 @@ export class InputSystem implements IGameSystem {
 
   // Get the player's current weapon slots for debugging
   getWeaponSlots(): (string | null)[] {
-    return [...this.weaponSlots];
+    return [...this.weaponSlots]; // Return a copy to prevent external modification
+  }
+
+  /**
+   * Set player death state - prevents all input when dead
+   */
+  setPlayerDead(isDead: boolean): void {
+    this.isPlayerDead = isDead;
+    console.log(`💀 Player death state set to: ${isDead}`);
+    
+    if (isDead) {
+      // Clear any pending actions
+      this.pendingWeaponFire = false;
+      this.pendingADSToggle = false;
+      this.isChargingGrenade = false;
+      this.grenadeChargeStart = 0;
+      this.grenadeChargeLevel = 0;
+      
+      // Stop auto-fire
+      this.stopAutoFire();
+    }
+  }
+
+  /**
+   * Get player death state
+   */
+  isPlayerDeadState(): boolean {
+    return this.isPlayerDead;
+  }
+
+  /**
+   * Handle input for dead players (spectator mode)
+   */
+  private handleSpectatorInput(): void {
+    // Check for respawn input
+    if ((this.keys.space.isDown || this.keys.enter.isDown) && (this.scene as any).canRespawn) {
+      // Prevent spam clicking
+      if (!this.lastRespawnRequest || Date.now() - this.lastRespawnRequest > 1000) {
+        this.lastRespawnRequest = Date.now();
+        (this.scene as any).requestRespawn();
+      }
+    }
+    
+    // Allow spectator camera movement (free look)
+    const spectatorSpeed = 3;
+    const camera = this.scene.cameras.main;
+    
+    if (this.keys.w.isDown) {
+      camera.scrollY -= spectatorSpeed;
+    }
+    if (this.keys.s.isDown) {
+      camera.scrollY += spectatorSpeed;
+    }
+    if (this.keys.a.isDown) {
+      camera.scrollX -= spectatorSpeed;
+    }
+    if (this.keys.d.isDown) {
+      camera.scrollX += spectatorSpeed;
+    }
+    
+    // TODO: Add spectator target switching with TAB
+    // if (this.keys.tab.isDown && !this.lastTabPress) {
+    //   this.switchSpectatorTarget();
+    //   this.lastTabPress = Date.now();
+    // }
+    // if (!this.keys.tab.isDown && this.lastTabPress && Date.now() - this.lastTabPress > 200) {
+    //   this.lastTabPress = 0;
+    // }
   }
 } 

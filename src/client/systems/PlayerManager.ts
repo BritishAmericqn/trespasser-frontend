@@ -12,7 +12,6 @@ interface PlayerSprite {
   container: Phaser.GameObjects.Container;
   body: Phaser.GameObjects.Sprite;
   weapon: Phaser.GameObjects.Sprite; // Add weapon sprite
-  directionIndicator: Phaser.GameObjects.Graphics;
   team: 'red' | 'blue';
   lastUpdate: number;
   maskGraphics?: Phaser.GameObjects.Graphics;
@@ -49,12 +48,102 @@ export class PlayerManager {
   setVisionRenderer(visionRenderer: VisionRenderer): void {
     this.visionRenderer = visionRenderer;
   }
+
+  /**
+   * Remove a specific player (for when they leave or die)
+   */
+  removePlayer(playerId: string): void {
+    console.log(`👋 Removing player: ${playerId}`);
+    
+    // Remove from visible players
+    const sprite = this.visiblePlayers.get(playerId);
+    if (sprite) {
+      // Clean up mask
+      if (sprite.mask) {
+        sprite.container.clearMask();
+        sprite.mask.destroy();
+      }
+      if (sprite.maskGraphics) {
+        sprite.maskGraphics.destroy();
+      }
+      
+      // Destroy sprite
+      sprite.container.destroy();
+      this.visiblePlayers.delete(playerId);
+    }
+    
+    // Remove from last seen positions
+    const lastSeen = this.lastSeenPositions.get(playerId);
+    if (lastSeen && lastSeen.sprite) {
+      lastSeen.sprite.destroy();
+      this.lastSeenPositions.delete(playerId);
+    }
+    
+    console.log(`✅ Player ${playerId} removed from PlayerManager`);
+  }
+
+  /**
+   * Debug method to check current player visibility
+   */
+  debugPlayerVisibility(): void {
+    console.log('👁️ PLAYER VISIBILITY DEBUG:');
+    console.log(`- Visible players: ${this.visiblePlayers.size}`);
+    console.log(`- Last seen players: ${this.lastSeenPositions.size}`);
+    console.log(`- Vision renderer active: ${!!this.visionRenderer}`);
+    console.log(`- Partial visibility masks: ${this.partialVisibilityEnabled ? 'ENABLED' : 'DISABLED'}`);
+    
+    for (const [id, sprite] of this.visiblePlayers) {
+      const pos = { x: sprite.container.x, y: sprite.container.y };
+      const hasMask = !!sprite.mask;
+      const alpha = sprite.container.alpha;
+      console.log(`  - Player ${id}: pos(${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}) alpha=${alpha} mask=${hasMask}`);
+    }
+    
+    for (const [id, lastSeen] of this.lastSeenPositions) {
+      console.log(`  - Ghost ${id}: pos(${lastSeen.position.x.toFixed(1)}, ${lastSeen.position.y.toFixed(1)})`);
+    }
+  }
+
+  /**
+   * Toggle partial visibility masks (for debugging)
+   */
+  togglePartialVisibility(): boolean {
+    this.partialVisibilityEnabled = !this.partialVisibilityEnabled;
+    console.log(`👁️ Partial visibility masks: ${this.partialVisibilityEnabled ? 'ENABLED' : 'DISABLED'}`);
+    
+    if (!this.partialVisibilityEnabled) {
+      // Remove all masks
+      for (const [id, sprite] of this.visiblePlayers) {
+        if (sprite.mask) {
+          sprite.container.clearMask();
+          sprite.mask.destroy();
+          sprite.mask = undefined;
+          
+          if (sprite.maskGraphics) {
+            sprite.maskGraphics.destroy();
+            sprite.maskGraphics = undefined;
+          }
+        }
+      }
+    } else {
+      // Re-apply masks
+      this.updateVisibilityMasks();
+    }
+    
+    return this.partialVisibilityEnabled;
+  }
   
   updatePlayers(serverPlayers: Map<string, PlayerState> | { [key: string]: PlayerState }): void {
     // Convert object to Map if needed
     const playersMap = serverPlayers instanceof Map 
       ? serverPlayers 
       : new Map(Object.entries(serverPlayers));
+    
+    // Debug log player count
+    const playerCount = Array.from(playersMap.keys()).filter(id => id !== this.localPlayerId).length;
+    if (playerCount > 0) {
+      console.log(`👥 PlayerManager: Updating ${playerCount} other players`);
+    }
     
     // Track which players are still visible
     const stillVisibleIds = new Set<string>();
@@ -84,6 +173,7 @@ export class PlayerManager {
       // Update state to use the correct position
       state.position = position;
       
+      // REVERTED: Just add all players for now - vision check was breaking everything
       stillVisibleIds.add(id);
       
       if (this.visiblePlayers.has(id)) {
@@ -108,6 +198,8 @@ export class PlayerManager {
   }
   
   private handlePlayerAppear(id: string, state: PlayerState): void {
+    console.log(`👤 Player ${id} appearing at position (${state.position.x}, ${state.position.y})`);
+    
     // Remove from last seen if they were there
     const lastSeen = this.lastSeenPositions.get(id);
     if (lastSeen && lastSeen.sprite) {
@@ -171,13 +263,53 @@ export class PlayerManager {
   private updatePlayer(id: string, state: PlayerState): void {
     const sprite = this.visiblePlayers.get(id);
     if (!sprite) return;
-    
+
     // Update position (could add interpolation here)
     sprite.container.setPosition(state.position.x, state.position.y);
     
-    // Update rotation based on velocity or angle if available
+    // Handle alive/dead state from backend
+    const isAlive = (state as any).isAlive !== false; // Default to alive if not specified
+    const wasDead = (sprite as any).isDead || false;
+    
+    if (!isAlive && !wasDead) {
+      // Player just died
+      this.handlePlayerDeath(id, state.position);
+    } else if (isAlive && wasDead) {
+      // Player just respawned
+      const invulnerableUntil = (state as any).invulnerableUntil;
+      this.handlePlayerRespawn(id, state.position, invulnerableUntil);
+    }
+    
+    // Skip rotation/weapon updates for dead players
+    if (!isAlive) {
+      sprite.lastUpdate = Date.now();
+      return;
+    }
+
+    // Debug log to see what rotation data we're getting
+    if (Math.random() < 0.05) { // Log 5% of updates to avoid spam
+      console.log(`🎯 Player ${id} state:`, {
+        rotation: (state as any).rotation,
+        direction: (state as any).direction,
+        mouseAngle: (state as any).mouseAngle,
+        angle: state.angle,
+        velocity: state.velocity
+      });
+    }
+    
+    // Use exact rotation from backend if available
     let playerAngle = 0;
-    if (state.velocity && (state.velocity.x !== 0 || state.velocity.y !== 0)) {
+    
+    // Priority 1: Use exact rotation/direction field
+    if ((state as any).rotation !== undefined) {
+      playerAngle = (state as any).rotation;
+    } else if ((state as any).direction !== undefined) {
+      playerAngle = (state as any).direction;
+    } else if ((state as any).mouseAngle !== undefined) {
+      playerAngle = (state as any).mouseAngle;
+    }
+    // Fallback: Calculate from velocity
+    else if (state.velocity && (state.velocity.x !== 0 || state.velocity.y !== 0)) {
       playerAngle = Math.atan2(state.velocity.y, state.velocity.x);
     } else if (state.angle !== undefined) {
       playerAngle = state.angle;
@@ -185,7 +317,6 @@ export class PlayerManager {
     
     // Rotate player sprite and weapon to face direction
     sprite.body.setRotation(playerAngle + Math.PI / 2); // Player rotated 90 degrees clockwise
-    sprite.directionIndicator.setRotation(playerAngle); // Direction indicator stays normal
     
     // Update weapon position and rotation for shoulder mounting
     const shoulderOffset = 8; // Distance from center to shoulder
@@ -234,15 +365,29 @@ export class PlayerManager {
   
   private createPlayerSprite(state: PlayerState): PlayerSprite {
     const container = this.scene.add.container(state.position.x, state.position.y);
-    container.setDepth(20);
+    
+    // Validate and log team assignment
+    const team = state.team || 'blue';
+    if (!state.team) {
+      console.warn(`⚠️ Player ${(state as any).id} missing team data, defaulting to blue`);
+    }
     
     // Use real player sprite (right-handed)
-    const body = this.assetManager.createPlayer(0, 0, state.team);
-    container.add(body);
+    const body = this.assetManager.createPlayer(0, 0, team);
     
     // Calculate initial rotation
     let playerAngle = 0;
-    if (state.velocity && (state.velocity.x !== 0 || state.velocity.y !== 0)) {
+    
+    // Priority 1: Use exact rotation/direction field
+    if ((state as any).rotation !== undefined) {
+      playerAngle = (state as any).rotation;
+    } else if ((state as any).direction !== undefined) {
+      playerAngle = (state as any).direction;
+    } else if ((state as any).mouseAngle !== undefined) {
+      playerAngle = (state as any).mouseAngle;
+    }
+    // Fallback: Calculate from velocity
+    else if (state.velocity && (state.velocity.x !== 0 || state.velocity.y !== 0)) {
       playerAngle = Math.atan2(state.velocity.y, state.velocity.x);
     } else if (state.angle !== undefined) {
       playerAngle = state.angle;
@@ -268,35 +413,21 @@ export class PlayerManager {
     weapon.setPosition(weaponX, weaponY); // Override position from createWeapon
     weapon.setRotation(playerAngle + Math.PI); // Apply 180-degree flip
     weapon.setDepth(19); // Just below player
-    container.add(weapon);
-    (weapon as any).weaponType = weaponType; // Store for comparison
     
     // Apply correct rotations from the start
     body.setRotation(playerAngle + Math.PI / 2); // Player rotated 90 degrees clockwise
     
-    // Direction indicator (small triangle) - adjust for sprite size
-    const directionIndicator = this.scene.add.graphics();
-    directionIndicator.fillStyle(0xffffff, 0.9);
-    directionIndicator.beginPath();
-    directionIndicator.moveTo(this.PLAYER_SIZE, 0);
-    directionIndicator.lineTo(this.PLAYER_SIZE + 6, -3);
-    directionIndicator.lineTo(this.PLAYER_SIZE + 6, 3);
-    directionIndicator.closePath();
-    directionIndicator.fillPath();
+    // Direction indicator removed - no longer needed
     
-    // Add subtle black outline to direction indicator
-    directionIndicator.lineStyle(1, 0x000000, 0.8);
-    directionIndicator.strokePath();
-    directionIndicator.setRotation(playerAngle); // Direction indicator stays normal
-    
-    container.add(directionIndicator);
+    container.add(body);
+    container.add(weapon);
+    container.setDepth(20);
     
     return {
       container,
       body,
       weapon,
-      directionIndicator,
-      team: state.team,
+      team: team,
       lastUpdate: Date.now()
     };
   }
@@ -464,5 +595,90 @@ export class PlayerManager {
       }
     }
     this.lastSeenPositions.clear();
+  }
+
+  /**
+   * Handle player death - show as corpse/ghost
+   */
+  handlePlayerDeath(playerId: string, deathPosition?: any): void {
+    console.log(`💀 Handling death for player: ${playerId}`);
+    
+    const sprite = this.visiblePlayers.get(playerId);
+    if (sprite) {
+      // Mark as dead and update visual appearance
+      (sprite as any).isDead = true;
+      
+      // Show as corpse - semi-transparent with gray tint
+      sprite.body.setAlpha(0.5);
+      sprite.body.setTint(0x666666);
+      
+      // Hide weapon
+      sprite.weapon.setVisible(false);
+      
+      // Optional: Play death animation if available
+      // sprite.body.play('death');
+      
+      console.log(`💀 Player ${playerId} shown as corpse`);
+    }
+  }
+
+  /**
+   * Handle player respawn - restore normal appearance and add invulnerability effect
+   */
+  handlePlayerRespawn(playerId: string, respawnPosition: any, invulnerableUntil?: number): void {
+    console.log(`✨ Handling respawn for player: ${playerId}`);
+    
+    const sprite = this.visiblePlayers.get(playerId);
+    if (sprite) {
+      // Mark as alive and restore normal appearance
+      (sprite as any).isDead = false;
+      
+      // Restore normal appearance
+      sprite.body.setAlpha(1.0);
+      sprite.body.setTint(0xFFFFFF);
+      
+      // Show weapon again
+      sprite.weapon.setVisible(true);
+      
+      // Update position if provided
+      if (respawnPosition) {
+        sprite.container.setPosition(respawnPosition.x, respawnPosition.y);
+      }
+      
+      // Add invulnerability effect if specified
+      if (invulnerableUntil && Date.now() < invulnerableUntil) {
+        this.showInvulnerabilityEffect(sprite, invulnerableUntil);
+      }
+      
+      console.log(`✨ Player ${playerId} respawned with normal appearance`);
+    }
+  }
+
+  /**
+   * Show invulnerability effect on player sprite
+   */
+  private showInvulnerabilityEffect(sprite: PlayerSprite, invulnerableUntil: number): void {
+    const duration = invulnerableUntil - Date.now();
+    if (duration <= 0) return;
+    
+    console.log(`🛡️ Showing invulnerability effect on player for ${duration}ms`);
+    
+    // Flash effect
+    const flashTween = this.scene.tweens.add({
+      targets: sprite.body,
+      alpha: { from: 1, to: 0.3 },
+      duration: 200,
+      yoyo: true,
+      repeat: Math.floor(duration / 400),
+      ease: 'Power2'
+    });
+    
+    // Clean up after invulnerability expires
+    this.scene.time.delayedCall(duration, () => {
+      if (flashTween.isPlaying()) {
+        flashTween.stop();
+      }
+      sprite.body.setAlpha(1);
+    });
   }
 } 

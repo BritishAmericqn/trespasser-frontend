@@ -160,13 +160,57 @@ export class VisualEffectsSystem implements IGameSystem {
   private setupBackendEventListeners(): void {
     // Listen for weapon events from backend
     this.scene.events.on('backend:weapon:fired', (data: any) => {
-      // Show muzzle flash for OTHER players only to avoid doubles
-      const gameScene = this.scene as any;
-      const localPlayerId = gameScene.networkSystem?.getSocket()?.id;
+      const socket = (this.scene as any).networkSystem?.getSocket();
+      const localPlayerId = socket?.id;
       
-      if (data.playerId && data.playerId !== localPlayerId) {
-        // This is another player firing - show their muzzle flash
+      if (data.playerId !== localPlayerId) {
+        // This is another player firing - show their muzzle flash AND store pending shot
         this.showMuzzleFlash(data.position, data.direction, data.weaponType, data.playerId);
+        
+        // IMPORTANT: Store pending shot for other players too so we can show their trails
+        if (socket) {
+          // Handle shotgun specially - store multiple pending shots for pellets
+          if (data.weaponType === 'shotgun') {
+            // Store 8 pending shots for shotgun pellets (shotgun always fires 8 pellets)
+            for (let pelletIndex = 0; pelletIndex < 8; pelletIndex++) {
+              const pendingKey = `${data.playerId}_${data.weaponType}_pellet_${pelletIndex}`;
+              this.pendingShots.set(pendingKey, {
+                sequence: data.sequence,
+                weaponType: data.weaponType,
+                startPosition: { ...data.position },
+                timestamp: data.timestamp || Date.now(),
+                pelletIndex: pelletIndex
+              });
+            }
+            
+            // Clean up old pending shots after 2 seconds (longer for shotgun)
+            this.scene.time.delayedCall(2000, () => {
+              for (let pelletIndex = 0; pelletIndex < 8; pelletIndex++) {
+                const pendingKey = `${data.playerId}_${data.weaponType}_pellet_${pelletIndex}`;
+                if (this.pendingShots.has(pendingKey)) {
+                  this.pendingShots.delete(pendingKey);
+                }
+              }
+            });
+            
+          } else {
+            // Regular weapons - use sequence number to handle multiple shots
+            const pendingKey = `${data.playerId}_${data.weaponType}_${data.sequence || Date.now()}`;
+            this.pendingShots.set(pendingKey, {
+              sequence: data.sequence,
+              weaponType: data.weaponType,
+              startPosition: { ...data.position },
+              timestamp: data.timestamp || Date.now()
+            });
+
+            // Clean up old pending shots after 1 second
+            this.scene.time.delayedCall(1000, () => {
+              if (this.pendingShots.has(pendingKey)) {
+                this.pendingShots.delete(pendingKey);
+              }
+            });
+          }
+        }
       } else {
         // Backend weapon:fired event received for local player - skipping to avoid double
       }
@@ -192,9 +236,21 @@ export class VisualEffectsSystem implements IGameSystem {
             }
           }
         } else {
-          // Regular weapons - find exact weapon type
-          pendingKey = `${data.playerId}_${data.weaponType}`;
-          pendingShot = this.pendingShots.get(pendingKey);
+          // Regular weapons - find by searching through all pending shots
+          // Look for shots from this player with this weapon type
+          for (const [key, shot] of this.pendingShots) {
+            if (key.startsWith(`${data.playerId}_${data.weaponType}_`)) {
+              pendingKey = key;
+              pendingShot = shot;
+              break; // Use the first matching shot (oldest)
+            }
+          }
+          
+          // Debug log for tracking misses only
+          if (!pendingShot && Math.random() < 0.3) {
+            console.log(`❌ No pending shot found for hit: player=${data.playerId} weapon=${data.weaponType}`);
+            console.log(`   Available keys:`, Array.from(this.pendingShots.keys()));
+          }
           
           // Fallback: try without weapon type if backend didn't send it
           if (!pendingShot && !data.weaponType) {
@@ -203,11 +259,14 @@ export class VisualEffectsSystem implements IGameSystem {
                                 'battlerifle', 'sniperrifle', 'revolver', 'suppressedpistol',
                                 'grenadelauncher', 'machinegun', 'antimaterialrifle'];
             for (const weapon of weaponTypes) {
-              pendingKey = `${data.playerId}_${weapon}`;
-              pendingShot = this.pendingShots.get(pendingKey);
-              if (pendingShot) {
-                break;
+              for (const [key, shot] of this.pendingShots) {
+                if (key.startsWith(`${data.playerId}_${weapon}_`)) {
+                  pendingKey = key;
+                  pendingShot = shot;
+                  break;
+                }
               }
+              if (pendingShot) break;
             }
           }
         }
@@ -240,9 +299,15 @@ export class VisualEffectsSystem implements IGameSystem {
           }
         }
       } else {
-        // Regular weapons - find exact weapon type
-        pendingKey = `${data.playerId}_${data.weaponType}`;
-        pendingShot = this.pendingShots.get(pendingKey);
+        // Regular weapons - find by searching through all pending shots
+        // Look for shots from this player with this weapon type
+        for (const [key, shot] of this.pendingShots) {
+          if (key.startsWith(`${data.playerId}_${data.weaponType}_`)) {
+            pendingKey = key;
+            pendingShot = shot;
+            break; // Use the first matching shot (oldest)
+          }
+        }
         
         // Fallback: try without weapon type if backend didn't send it
         if (!pendingShot && !data.weaponType) {
@@ -251,11 +316,14 @@ export class VisualEffectsSystem implements IGameSystem {
                               'battlerifle', 'sniperrifle', 'revolver', 'suppressedpistol',
                               'grenadelauncher', 'machinegun', 'antimaterialrifle'];
           for (const weapon of weaponTypes) {
-            pendingKey = `${data.playerId}_${weapon}`;
-            pendingShot = this.pendingShots.get(pendingKey);
-            if (pendingShot) {
-              break;
+            for (const [key, shot] of this.pendingShots) {
+              if (key.startsWith(`${data.playerId}_${weapon}_`)) {
+                pendingKey = key;
+                pendingShot = shot;
+                break;
+              }
             }
+            if (pendingShot) break;
           }
         }
       }
@@ -311,9 +379,15 @@ export class VisualEffectsSystem implements IGameSystem {
               }
             }
           } else {
-            // Regular weapons - find exact weapon type
-            pendingKey = `${data.playerId}_${data.weaponType}`;
-            pendingShot = this.pendingShots.get(pendingKey);
+            // Regular weapons - find by searching through all pending shots
+            // Look for shots from this player with this weapon type
+            for (const [key, shot] of this.pendingShots) {
+              if (key.startsWith(`${data.playerId}_${data.weaponType}_`)) {
+                pendingKey = key;
+                pendingShot = shot;
+                break; // Use the first matching shot (oldest)
+              }
+            }
             
             // Fallback: try without weapon type if backend didn't send it
             if (!pendingShot && !data.weaponType) {
@@ -322,11 +396,14 @@ export class VisualEffectsSystem implements IGameSystem {
                                   'battlerifle', 'sniperrifle', 'revolver', 'suppressedpistol',
                                   'grenadelauncher', 'machinegun', 'antimaterialrifle'];
               for (const weapon of weaponTypes) {
-                pendingKey = `${data.playerId}_${weapon}`;
-                pendingShot = this.pendingShots.get(pendingKey);
-                if (pendingShot) {
-                  break;
+                for (const [key, shot] of this.pendingShots) {
+                  if (key.startsWith(`${data.playerId}_${weapon}_`)) {
+                    pendingKey = key;
+                    pendingShot = shot;
+                    break;
+                  }
                 }
+                if (pendingShot) break;
               }
             }
           }
@@ -402,14 +479,19 @@ export class VisualEffectsSystem implements IGameSystem {
           });
           
         } else {
-          // Regular weapons - store single pending shot
-          const pendingKey = `${socket.id}_${data.weaponType}`;
+          // Regular weapons - use sequence number to handle multiple shots
+          const pendingKey = `${socket.id}_${data.weaponType}_${data.sequence || Date.now()}`;
           this.pendingShots.set(pendingKey, {
             sequence: data.sequence,
             weaponType: data.weaponType,
             startPosition: { ...data.position },
             timestamp: data.timestamp
           });
+          
+          // Debug log for tracking (only log 10% to avoid spam)
+          if (Math.random() < 0.1) {
+            console.log(`📝 Stored local pending shot: ${pendingKey}`);
+          }
 
           // Clean up old pending shots after 1 second
           this.scene.time.delayedCall(1000, () => {
