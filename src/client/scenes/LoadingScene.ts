@@ -90,12 +90,12 @@ export class LoadingScene extends Phaser.Scene {
     // Floor texture
     this.load.image('floor_tile', 'src/assets/mapfloor.png');
     
-    // Concrete wall variants (for variation in tiling)
+    // Concrete wall variants (for variation in tiling) - Now using 12x12
     this.load.image('wall_concrete_1', 'src/assets/10x10wall.png');
-    this.load.image('wall_concrete_2', 'src/assets/10x10wall2.png');
+    this.load.image('wall_concrete_2', 'src/assets/12x12wall2.png');  // NEW 12x12 texture
     
-    // Soft wall variants (wood material)
-    this.load.image('wall_soft_1', 'src/assets/10x10woodwall1.png');
+    // Soft wall variants (wood material) - Now using 12x12
+    this.load.image('wall_soft_1', 'src/assets/12x12woodwall1.png');  // NEW 12x12 texture
     this.load.image('wall_soft_2', 'src/assets/10x10woodwall2.png');
   }
 } 

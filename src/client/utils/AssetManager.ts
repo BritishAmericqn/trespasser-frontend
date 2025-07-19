@@ -61,18 +61,34 @@ export class AssetManager {
     
     // Select texture based on material and variation
     let textureKey: string;
+    let is12x12 = false; // Track if we're using a 12x12 texture
+    
     if (material === 'concrete') {
       textureKey = `wall_concrete_${variation}`;
+      // Concrete_2 is now 12x12
+      if (variation === 2) is12x12 = true;
     } else {
       textureKey = `wall_soft_${variation}`;
+      // Soft_1 is now 12x12
+      if (variation === 1) is12x12 = true;
     }
     
     const sprite = this.scene.add.sprite(x, y, textureKey);
-    sprite.setScale(this.SCALES.WALL); // 10x20 → 10x20 (no scaling)
+    sprite.setScale(this.SCALES.WALL);
     
-    // Set origin to bottom-center so 10x20 sprite aligns bottom with tile bottom
-    // This makes the sprite overhang ABOVE the 10x10 tile, not below
-    sprite.setOrigin(0.5, 1.0);
+    // For 12x12 textures, we need to adjust the position to center on the 10x10 tile
+    if (is12x12) {
+      // 12x12 texture needs to be offset by -1 pixel in both directions 
+      // to center on the same point as a 10x10 texture would
+      sprite.setOrigin(0.5, 1.0); // Keep bottom-center origin
+      
+      // The sprite is already positioned at x,y which is the center of the 10x10 tile
+      // The 12x12 sprite with origin 0.5,1.0 will automatically center correctly
+      // because Phaser positions based on the origin point
+    } else {
+      // 10x10 textures use standard positioning
+      sprite.setOrigin(0.5, 1.0); // Bottom-center origin
+    }
     
     return sprite;
   }

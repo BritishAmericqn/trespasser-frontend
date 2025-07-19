@@ -223,7 +223,7 @@ export class GameScene extends Phaser.Scene {
 
     // Add debug instructions to UI
     const debugText = this.add.text(5, GAME_CONFIG.GAME_HEIGHT - 20, 
-      'Debug: P - toggle pos, B - bullets, N - network, L - loadout, J - join', {
+      'Debug: P - toggle pos, B - bullets, N - network, L - loadout, J - join, W - test walls', {
       fontSize: '7px',
       color: '#666666'
     }).setOrigin(0, 1);
@@ -1155,6 +1155,77 @@ export class GameScene extends Phaser.Scene {
       // Also check weapon slots in InputSystem
       const weaponSlots = this.inputSystem.getWeaponSlots();
       console.log('- InputSystem weapon slots:', weaponSlots);
+    });
+    
+    // Debug key to test wall textures - Press W
+    this.input.keyboard!.on('keydown-W', () => {
+      console.log('🧱 Testing wall texture alignment...');
+      
+      // Clear any existing test walls
+      if ((this as any).testWalls) {
+        (this as any).testWalls.forEach((wall: Phaser.GameObjects.Sprite) => wall.destroy());
+      }
+      (this as any).testWalls = [];
+      
+      // Create a grid of test walls to show alignment
+      const testX = 100;
+      const testY = 100;
+      const spacing = 15; // Space between walls
+      
+      // Create concrete walls (mix of 10x10 and 12x12)
+      for (let i = 0; i < 4; i++) {
+        const wall = this.assetManager.createWall(testX + (i * spacing), testY, 'concrete');
+        wall.setDepth(50); // Above other elements
+        (this as any).testWalls.push(wall);
+        
+        // Add text label
+        const label = this.add.text(testX + (i * spacing), testY + 5, 
+          i % 2 === 0 ? '10x10' : '12x12', {
+          fontSize: '6px',
+          color: '#ffff00'
+        }).setOrigin(0.5, 0).setDepth(51);
+        (this as any).testWalls.push(label);
+      }
+      
+      // Create wood walls below (mix of 10x10 and 12x12)
+      for (let i = 0; i < 4; i++) {
+        const wall = this.assetManager.createWall(testX + (i * spacing), testY + 25, 'wood');
+        wall.setDepth(50);
+        (this as any).testWalls.push(wall);
+        
+        // Add text label
+        const label = this.add.text(testX + (i * spacing), testY + 30, 
+          i % 2 === 1 ? '12x12' : '10x10', {
+          fontSize: '6px',
+          color: '#00ff00'
+        }).setOrigin(0.5, 0).setDepth(51);
+        (this as any).testWalls.push(label);
+      }
+      
+      // Add alignment guides
+      const guides = this.add.graphics();
+      guides.lineStyle(1, 0xff0000, 0.5);
+      
+      // Draw vertical lines at wall centers
+      for (let i = 0; i < 4; i++) {
+        const x = testX + (i * spacing);
+        guides.moveTo(x, testY - 10);
+        guides.lineTo(x, testY + 40);
+      }
+      
+      // Draw horizontal line at base
+      guides.moveTo(testX - 10, testY);
+      guides.lineTo(testX + 60, testY);
+      guides.moveTo(testX - 10, testY + 25);
+      guides.lineTo(testX + 60, testY + 25);
+      
+      guides.strokePath();
+      guides.setDepth(49);
+      (this as any).testWalls.push(guides);
+      
+      console.log('✅ Test walls created. Red lines show center alignment.');
+      console.log('Concrete row: alternating 10x10 and 12x12');
+      console.log('Wood row: alternating 12x12 and 10x10');
     });
   }
 
