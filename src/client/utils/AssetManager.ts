@@ -1,6 +1,5 @@
 export class AssetManager {
   private scene: Phaser.Scene;
-  private wallVariationCache: Map<string, number> = new Map();
   
   // Scaling constants for 480x270 pixel art game
   private readonly SCALES = {
@@ -46,49 +45,23 @@ export class AssetManager {
     return sprite;
   }
 
-  // Create wall sprites with random variation for tiling
+  // Create wall sprites using 12x12 textures only
   createWall(x: number, y: number, material: 'concrete' | 'wood'): Phaser.GameObjects.Sprite {
-    const cacheKey = `${x},${y}`;
-    
-    // Use cached variation or generate new one
-    let variation: number;
-    if (this.wallVariationCache.has(cacheKey)) {
-      variation = this.wallVariationCache.get(cacheKey)!;
-    } else {
-      variation = Math.random() > 0.5 ? 1 : 2; // Randomly choose variant 1 or 2
-      this.wallVariationCache.set(cacheKey, variation);
-    }
-    
-    // Select texture based on material and variation
+    // Select texture based on material - always use 12x12 versions
     let textureKey: string;
-    let is12x12 = false; // Track if we're using a 12x12 texture
     
     if (material === 'concrete') {
-      textureKey = `wall_concrete_${variation}`;
-      // Concrete_2 is now 12x12
-      if (variation === 2) is12x12 = true;
+      textureKey = 'wall_concrete_2'; // Always use 12x12 concrete texture
     } else {
-      textureKey = `wall_soft_${variation}`;
-      // Soft_1 is now 12x12
-      if (variation === 1) is12x12 = true;
+      textureKey = 'wall_soft_1'; // Always use 12x12 wood texture
     }
     
     const sprite = this.scene.add.sprite(x, y, textureKey);
     sprite.setScale(this.SCALES.WALL);
     
-    // For 12x12 textures, we need to adjust the position to center on the 10x10 tile
-    if (is12x12) {
-      // 12x12 texture needs to be offset by -1 pixel in both directions 
-      // to center on the same point as a 10x10 texture would
-      sprite.setOrigin(0.5, 1.0); // Keep bottom-center origin
-      
-      // The sprite is already positioned at x,y which is the center of the 10x10 tile
-      // The 12x12 sprite with origin 0.5,1.0 will automatically center correctly
-      // because Phaser positions based on the origin point
-    } else {
-      // 10x10 textures use standard positioning
-      sprite.setOrigin(0.5, 1.0); // Bottom-center origin
-    }
+    // All walls now use 12x12 textures with bottom-center origin
+    // The 12x12 sprite with origin 0.5,1.0 will center correctly on the 10x10 tile position
+    sprite.setOrigin(0.5, 1.0);
     
     return sprite;
   }
@@ -293,22 +266,7 @@ export class AssetManager {
     return sprite;
   }
 
-  // Get random wall variation for a position (consistent per position)
-  getWallVariation(x: number, y: number): number {
-    const cacheKey = `${x},${y}`;
-    if (this.wallVariationCache.has(cacheKey)) {
-      return this.wallVariationCache.get(cacheKey)!;
-    }
-    
-    const variation = Math.random() > 0.5 ? 1 : 2;
-    this.wallVariationCache.set(cacheKey, variation);
-    return variation;
-  }
 
-  // Clear wall variation cache (useful for level changes)
-  clearWallVariations(): void {
-    this.wallVariationCache.clear();
-  }
 
   // Get properly scaled dimensions for collision detection
   getPlayerSize(): { width: number; height: number } {

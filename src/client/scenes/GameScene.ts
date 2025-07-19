@@ -1159,7 +1159,7 @@ export class GameScene extends Phaser.Scene {
     
     // Debug key to test wall textures - Press W
     this.input.keyboard!.on('keydown-W', () => {
-      console.log('🧱 Testing wall texture alignment...');
+      console.log('🧱 Testing 12x12 wall texture alignment...');
       
       // Clear any existing test walls
       if ((this as any).testWalls) {
@@ -1172,7 +1172,7 @@ export class GameScene extends Phaser.Scene {
       const testY = 100;
       const spacing = 15; // Space between walls
       
-      // Create concrete walls (mix of 10x10 and 12x12)
+      // Create concrete walls (all 12x12)
       for (let i = 0; i < 4; i++) {
         const wall = this.assetManager.createWall(testX + (i * spacing), testY, 'concrete');
         wall.setDepth(50); // Above other elements
@@ -1180,14 +1180,14 @@ export class GameScene extends Phaser.Scene {
         
         // Add text label
         const label = this.add.text(testX + (i * spacing), testY + 5, 
-          i % 2 === 0 ? '10x10' : '12x12', {
+          '12x12', {
           fontSize: '6px',
           color: '#ffff00'
         }).setOrigin(0.5, 0).setDepth(51);
         (this as any).testWalls.push(label);
       }
       
-      // Create wood walls below (mix of 10x10 and 12x12)
+      // Create wood walls below (all 12x12)
       for (let i = 0; i < 4; i++) {
         const wall = this.assetManager.createWall(testX + (i * spacing), testY + 25, 'wood');
         wall.setDepth(50);
@@ -1195,7 +1195,7 @@ export class GameScene extends Phaser.Scene {
         
         // Add text label
         const label = this.add.text(testX + (i * spacing), testY + 30, 
-          i % 2 === 1 ? '12x12' : '10x10', {
+          '12x12', {
           fontSize: '6px',
           color: '#00ff00'
         }).setOrigin(0.5, 0).setDepth(51);
@@ -1224,8 +1224,8 @@ export class GameScene extends Phaser.Scene {
       (this as any).testWalls.push(guides);
       
       console.log('✅ Test walls created. Red lines show center alignment.');
-      console.log('Concrete row: alternating 10x10 and 12x12');
-      console.log('Wood row: alternating 12x12 and 10x10');
+      console.log('Concrete row: all 12x12 concrete walls');
+      console.log('Wood row: all 12x12 wood walls');
     });
   }
 
