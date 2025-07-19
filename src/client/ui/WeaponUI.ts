@@ -29,7 +29,7 @@ export class WeaponUI implements IGameSystem {
     
     // Support Weapons
     grenadelauncher: 6,
-    machinegun: 100,
+    machinegun: 200,         // Updated to match backend MAX_AMMO
     antimaterialrifle: 5,
     
     // Thrown Weapons (total count)
@@ -39,30 +39,30 @@ export class WeaponUI implements IGameSystem {
     rocket: 1  // Rocket launcher
   };
   
-  // Max reserve ammo (generous for testing)
+  // Max reserve ammo (matching backend exactly)
   private readonly MAX_RESERVE_AMMO: Record<string, number> = {
-    // Primary
-    rifle: 300,         // Increased from 180
-    smg: 350,           // Increased from 210
-    shotgun: 80,        // Increased from 32
-    battlerifle: 200,   // Increased from 120
-    sniperrifle: 50,    // Increased from 30
+    // Primary - updated to match backend
+    rifle: 180,         // 6 extra mags (was 300)
+    smg: 210,           // 6 extra mags (was 350)
+    shotgun: 32,        // 32 extra shells (was 80)
+    battlerifle: 120,   // 6 extra mags (was 200)
+    sniperrifle: 30,    // 6 extra mags (was 50)
     
-    // Secondary
-    pistol: 120,        // Increased from 72
-    revolver: 60,       // Increased from 36
-    suppressedpistol: 150, // Increased from 90
+    // Secondary - updated to match backend
+    pistol: 72,         // 6 extra mags (was 120)
+    revolver: 36,       // 6 extra cylinders (was 60)
+    suppressedpistol: 90, // 6 extra mags (was 150)
     
-    // Support
-    grenadelauncher: 30, // Increased from 18
-    machinegun: 500,    // Increased from 300
-    antimaterialrifle: 40, // Increased from 20
+    // Support - updated to match backend
+    grenadelauncher: 18, // 3 extra reloads (was 30)
+    machinegun: 600,    // 3 extra belts (matches backend)
+    antimaterialrifle: 20, // 4 extra mags (was 40)
     
-    // Thrown
-    grenade: 5,         // Increased from 2
-    smokegrenade: 5,    // Increased from 2
-    flashbang: 5,       // Increased from 2
-    rocket: 5           // Increased from 3
+    // Thrown - updated to match backend
+    grenade: 2,         // Total count (was 5)
+    smokegrenade: 2,    // Total count (was 5)
+    flashbang: 2,       // Total count (was 5)
+    rocket: 5           // Total count (matches backend)
   };
   
   // Dynamic weapon storage
@@ -72,6 +72,11 @@ export class WeaponUI implements IGameSystem {
   private isADS: boolean = false;
   private lastDamageTime: number = 0;
   private damageFlashDuration: number = 300; // ms
+  
+  // Machine gun heat system
+  private machinegunHeat: number = 0;
+  private isOverheated: boolean = false;
+  private heatBar: Phaser.GameObjects.Graphics | null = null;
 
   constructor(scene: Phaser.Scene) {
     this.scene = scene;
@@ -88,14 +93,26 @@ export class WeaponUI implements IGameSystem {
     }
     
     this.setupEventListeners();
+    
+    // Create heat bar graphics
+    this.heatBar = this.scene.add.graphics();
+    this.heatBar.setDepth(100); // UI layer
+    this.heatBar.setVisible(false); // Hidden by default
   }
 
   update(deltaTime: number): void {
-    // No regular updates needed for UI
+    // Update heat bar display
+    this.renderHeatBar();
   }
 
   destroy(): void {
     this.removeEventListeners();
+    
+    // Clean up heat bar graphics
+    if (this.heatBar) {
+      this.heatBar.destroy();
+      this.heatBar = null;
+    }
   }
 
   render(ctx: CanvasRenderingContext2D): void {
@@ -108,6 +125,7 @@ export class WeaponUI implements IGameSystem {
     if (this.grenadeCharge > 0) {
       this.renderChargeBar(ctx);
     }
+    this.renderHeatBar();
   }
 
   private setupEventListeners(): void {
@@ -168,19 +186,31 @@ export class WeaponUI implements IGameSystem {
       
     });
 
-    // Listen for weapon switching (from InputSystem)
-    this.scene.events.on('weapon:switch', (data: any) => {
-      this.currentWeapon = data.toWeapon;
-    });
-    
-    // Listen for reload start (for immediate UI feedback)
+    // Listen for weapon reload start
     this.scene.events.on('weapon:reload', (data: any) => {
-      if (data.weaponType in this.weapons) {
+      if (this.weapons.has(data.weaponType)) {
         const weapon = this.weapons.get(data.weaponType);
         if (weapon) {
           weapon.isReloading = true;
         }
       }
+    });
+    
+    // Listen for backend heat updates
+    this.scene.events.on('backend:weapon:heat:update', (data: any) => {
+      if (data.weaponType === 'machinegun') {
+        const previousHeat = this.machinegunHeat;
+        const previousOverheated = this.isOverheated;
+        
+        this.machinegunHeat = data.heatLevel || 0;
+        this.isOverheated = data.isOverheated || false;
+        
+      }
+    });
+
+    // Listen for weapon switching (from InputSystem)
+    this.scene.events.on('weapon:switch', (data: any) => {
+      this.currentWeapon = data.toWeapon;
     });
   }
 
@@ -192,6 +222,8 @@ export class WeaponUI implements IGameSystem {
     this.scene.events.off('ads:toggle');
     this.scene.events.off('weapon:ammo:decrease');
     this.scene.events.off('weapon:switch');
+    this.scene.events.off('weapon:reload');
+    this.scene.events.off('backend:weapon:heat:update');
   }
 
   private renderAmmoCounter(ctx: CanvasRenderingContext2D): void {
@@ -408,6 +440,66 @@ export class WeaponUI implements IGameSystem {
         weapon.currentAmmo = Math.max(0, weapon.currentAmmo - amount);
       }
     }
+  }
+  
+  private renderHeatBar(): void {
+    if (!this.heatBar) return;
+    
+    this.heatBar.clear();
+    
+    // Only show heat bar when using machine gun
+    if (this.currentWeapon === 'machinegun') {
+      this.heatBar.setVisible(true);
+      
+      const x = 10;
+      const y = 25; // Below health bar
+      const width = 60;
+      const height = 4;
+      const maxHeat = 320;
+      
+      // Background
+      this.heatBar.fillStyle(0x333333);
+      this.heatBar.fillRect(x, y, width, height);
+      
+      // Heat level fill
+      const heatPercent = Math.min(this.machinegunHeat / maxHeat, 1);
+      const fillWidth = width * heatPercent;
+      
+      // Color based on heat level
+      let heatColor = 0x00ff00; // Green (cool)
+      if (this.isOverheated) {
+        heatColor = 0xff0000; // Red (overheated)
+      } else if (this.machinegunHeat > 250) {
+        heatColor = 0xff0000; // Red (critical)
+      } else if (this.machinegunHeat > 160) {
+        heatColor = 0xff8800; // Orange (hot)
+      } else if (this.machinegunHeat > 80) {
+        heatColor = 0xffff00; // Yellow (warm)
+      }
+      
+      this.heatBar.fillStyle(heatColor);
+      this.heatBar.fillRect(x, y, fillWidth, height);
+      
+      // Border
+      this.heatBar.lineStyle(1, 0xffffff);
+      this.heatBar.strokeRect(x, y, width, height);
+      
+      // Overheat warning text
+      if (this.isOverheated) {
+        // Flash effect for overheated state - make it more visible
+        const flashTime = Date.now() * 0.005; // Slower flash
+        const flashAlpha = Math.sin(flashTime) > 0 ? 0.8 : 0.3;
+        this.heatBar.fillStyle(0xff0000, flashAlpha);
+        this.heatBar.fillRect(x - 1, y - 1, width + 2, height + 2);
+      }
+    } else {
+      this.heatBar.setVisible(false);
+    }
+  }
+  
+  // Check if machine gun is overheated (for InputSystem)
+  isMachinegunOverheated(): boolean {
+    return this.currentWeapon === 'machinegun' && this.isOverheated;
   }
 
   // Debug methods

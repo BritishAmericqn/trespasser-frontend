@@ -223,7 +223,7 @@ export class GameScene extends Phaser.Scene {
 
     // Add debug instructions to UI
     const debugText = this.add.text(5, GAME_CONFIG.GAME_HEIGHT - 20, 
-      'Debug: P - toggle pos, B - bullets, N - network, L - loadout, J - join, W - test walls', {
+      'Debug: P - toggle pos, B - bullets, N - network, L - loadout, J - join', {
       fontSize: '7px',
       color: '#666666'
     }).setOrigin(0, 1);
@@ -1078,6 +1078,67 @@ export class GameScene extends Phaser.Scene {
         console.log('No walls found!');
       }
     });
+    
+    // Enhanced polygon debugging - Press G key
+    this.input.keyboard!.on('keydown-G', () => {
+      console.log('🔺 ENHANCED POLYGON DEBUG');
+      console.log('========================');
+      
+      const polygon = this.visionRenderer.getCurrentPolygon();
+      if (!polygon || polygon.length === 0) {
+        console.log('❌ No polygon data available');
+        return;
+      }
+      
+      console.log(`📊 Polygon Analysis: ${polygon.length} vertices`);
+      
+      // Log each vertex with detailed analysis
+      polygon.forEach((vertex, i) => {
+        const prev = polygon[i === 0 ? polygon.length - 1 : i - 1];
+        const next = polygon[(i + 1) % polygon.length];
+        
+        const prevDist = prev ? Math.sqrt(Math.pow(vertex.x - prev.x, 2) + Math.pow(vertex.y - prev.y, 2)) : 0;
+        const nextDist = next ? Math.sqrt(Math.pow(next.x - vertex.x, 2) + Math.pow(next.y - vertex.y, 2)) : 0;
+        
+        const angle = prev && next ? 
+          Math.atan2(next.y - vertex.y, next.x - vertex.x) - Math.atan2(prev.y - vertex.y, prev.x - vertex.x) : 0;
+        const angleDeg = angle * 180 / Math.PI;
+        
+        console.log(`  Vertex ${i}: (${vertex.x.toFixed(1)}, ${vertex.y.toFixed(1)}) | ` +
+                   `Distances: ${prevDist.toFixed(1)}px ← → ${nextDist.toFixed(1)}px | ` +
+                   `Angle: ${angleDeg.toFixed(1)}°` +
+                   (nextDist > 50 ? ' ⚠️ LARGE GAP' : '') +
+                   (Math.abs(angleDeg) < 5 ? ' ⚠️ STRAIGHT LINE' : ''));
+      });
+      
+      // Check for potential issues
+      const largeGaps = polygon.filter((vertex, i) => {
+        const next = polygon[(i + 1) % polygon.length];
+        if (!next) return false;
+        const dist = Math.sqrt(Math.pow(next.x - vertex.x, 2) + Math.pow(next.y - vertex.y, 2));
+        return dist > 50;
+      });
+      
+      const duplicates = polygon.filter((vertex, i) => {
+        const next = polygon[(i + 1) % polygon.length];
+        if (!next) return false;
+        return Math.abs(vertex.x - next.x) < 0.1 && Math.abs(vertex.y - next.y) < 0.1;
+      });
+      
+      if (largeGaps.length > 0) {
+        console.warn(`⚠️ Found ${largeGaps.length} large gaps between vertices`);
+      }
+      
+      if (duplicates.length > 0) {
+        console.warn(`⚠️ Found ${duplicates.length} duplicate/very close vertices`);
+      }
+      
+      // Toggle detailed visualization
+      const visionRenderer = this.visionRenderer as any;
+      visionRenderer.detailedDebug = !visionRenderer.detailedDebug;
+      console.log(`🔍 Detailed debug visualization: ${visionRenderer.detailedDebug ? 'ON' : 'OFF'}`);
+      console.log('💡 Look for numbered vertices and red lines indicating large gaps');
+    });
 
     // Debug collision system - Press C key
     this.input.keyboard!.on('keydown-C', () => {
@@ -1156,77 +1217,7 @@ export class GameScene extends Phaser.Scene {
       const weaponSlots = this.inputSystem.getWeaponSlots();
       console.log('- InputSystem weapon slots:', weaponSlots);
     });
-    
-    // Debug key to test wall textures - Press W
-    this.input.keyboard!.on('keydown-W', () => {
-      console.log('🧱 Testing 12x12 wall texture alignment...');
-      
-      // Clear any existing test walls
-      if ((this as any).testWalls) {
-        (this as any).testWalls.forEach((wall: Phaser.GameObjects.Sprite) => wall.destroy());
-      }
-      (this as any).testWalls = [];
-      
-      // Create a grid of test walls to show alignment
-      const testX = 100;
-      const testY = 100;
-      const spacing = 15; // Space between walls
-      
-      // Create concrete walls (all 12x12)
-      for (let i = 0; i < 4; i++) {
-        const wall = this.assetManager.createWall(testX + (i * spacing), testY, 'concrete');
-        wall.setDepth(50); // Above other elements
-        (this as any).testWalls.push(wall);
-        
-        // Add text label
-        const label = this.add.text(testX + (i * spacing), testY + 5, 
-          '12x12', {
-          fontSize: '6px',
-          color: '#ffff00'
-        }).setOrigin(0.5, 0).setDepth(51);
-        (this as any).testWalls.push(label);
-      }
-      
-      // Create wood walls below (all 12x12)
-      for (let i = 0; i < 4; i++) {
-        const wall = this.assetManager.createWall(testX + (i * spacing), testY + 25, 'wood');
-        wall.setDepth(50);
-        (this as any).testWalls.push(wall);
-        
-        // Add text label
-        const label = this.add.text(testX + (i * spacing), testY + 30, 
-          '12x12', {
-          fontSize: '6px',
-          color: '#00ff00'
-        }).setOrigin(0.5, 0).setDepth(51);
-        (this as any).testWalls.push(label);
-      }
-      
-      // Add alignment guides
-      const guides = this.add.graphics();
-      guides.lineStyle(1, 0xff0000, 0.5);
-      
-      // Draw vertical lines at wall centers
-      for (let i = 0; i < 4; i++) {
-        const x = testX + (i * spacing);
-        guides.moveTo(x, testY - 10);
-        guides.lineTo(x, testY + 40);
-      }
-      
-      // Draw horizontal line at base
-      guides.moveTo(testX - 10, testY);
-      guides.lineTo(testX + 60, testY);
-      guides.moveTo(testX - 10, testY + 25);
-      guides.lineTo(testX + 60, testY + 25);
-      
-      guides.strokePath();
-      guides.setDepth(49);
-      (this as any).testWalls.push(guides);
-      
-      console.log('✅ Test walls created. Red lines show center alignment.');
-      console.log('Concrete row: all 12x12 concrete walls');
-      console.log('Wood row: all 12x12 wood walls');
-    });
+
   }
 
 

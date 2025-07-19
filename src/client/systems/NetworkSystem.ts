@@ -265,6 +265,12 @@ export class NetworkSystem implements IGameSystem {
       }
     });
 
+    this.socket.on('weapon:heat:update', (data: any) => {
+      if (this.connectionState === ConnectionState.AUTHENTICATED) {
+        this.scene.events.emit('backend:weapon:heat:update', data);
+      }
+    });
+
     this.socket.on('weapon:switched', (data: any) => {
       if (this.connectionState === ConnectionState.AUTHENTICATED) {
         this.scene.events.emit('backend:weapon:switched', data);

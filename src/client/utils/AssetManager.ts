@@ -56,7 +56,8 @@ export class AssetManager {
       textureKey = 'wall_soft_1'; // Always use 12x12 wood texture
     }
     
-    const sprite = this.scene.add.sprite(x, y, textureKey);
+    // Adjust y-position down by 1 pixel to fix alignment (12x12 walls were 1 pixel too high)
+    const sprite = this.scene.add.sprite(x, y + 1, textureKey);
     sprite.setScale(this.SCALES.WALL);
     
     // All walls now use 12x12 textures with bottom-center origin
@@ -145,7 +146,21 @@ export class AssetManager {
     
     const weapon = this.scene.add.sprite(finalX, finalY, textureKey);
     weapon.setScale(this.SCALES.WEAPON_HELD);
-    weapon.setOrigin(0.2, 0.5); // Grip point for right-handed hold
+    
+    // Set weapon-specific origin points for proper grip positioning
+    let originX = 0.2; // Default grip point from left
+    let originY = 0.5; // Default grip point from top
+    
+    // Adjust grip point for specific weapons
+    switch (weaponType) {
+      case 'machinegun':
+        originX = 0.7; // Move grip point to the right (towards stock)
+        originY = 0.35; // Keep the vertical adjustment
+        break;
+      // Add other weapon adjustments here as needed
+    }
+    
+    weapon.setOrigin(originX, originY); // Grip point for right-handed hold
     weapon.setRotation(facingAngle + Math.PI); // Weapon flipped 180 degrees (barrel away)
     
     return weapon;

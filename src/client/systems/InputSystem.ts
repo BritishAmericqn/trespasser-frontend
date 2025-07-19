@@ -58,28 +58,28 @@ export class InputSystem implements IGameSystem {
   
   // Full-auto firing system
   private weaponRPM: { [key: string]: number } = {
-    // Primary weapons
-    rifle: 600,              // 600 rounds per minute (10 rounds per second)
-    smg: 800,                // 800 rounds per minute (13.33 rounds per second)
-    shotgun: 120,            // 120 rounds per minute (2 rounds per second)
-    battlerifle: 450,        // 450 rounds per minute (7.5 rounds per second)
-    sniperrifle: 60,         // 60 rounds per minute (1 round per second)
+    // Primary weapons - updated to match backend
+    rifle: 600,              // 600 rounds per minute
+    smg: 900,                // 900 rounds per minute (was 800)
+    shotgun: 120,             // 120 rounds per minute (restored from 70)
+    battlerifle: 450,        // 450 rounds per minute
+    sniperrifle: 40,         // 40 rounds per minute (was 60)
     
-    // Secondary weapons
-    pistol: 200,             // 200 rounds per minute (3.33 rounds per second)
-    revolver: 150,           // 150 rounds per minute (2.5 rounds per second)
-    suppressedpistol: 250,   // 250 rounds per minute (4.17 rounds per second)
+    // Secondary weapons - updated to match backend
+    pistol: 450,             // 450 rounds per minute (was 200)
+    revolver: 150,           // 150 rounds per minute
+    suppressedpistol: 450,   // 450 rounds per minute (was 250)
     
-    // Support weapons
-    rocket: 60,              // 60 rounds per minute (1 round per second)
-    grenade: 120,            // 120 rounds per minute (2 rounds per second)
-    grenadelauncher: 90,     // 90 rounds per minute (1.5 rounds per second)
-    machinegun: 600,         // 600 rounds per minute (10 rounds per second)
-    antimaterialrifle: 30,   // 30 rounds per minute (0.5 rounds per second)
+    // Support weapons - updated to match backend
+    rocket: 30,              // 30 rounds per minute (was 60)
+    grenade: 60,             // 60 rounds per minute (was 120)
+    grenadelauncher: 60,     // 60 rounds per minute (was 90) - IGNORED per user
+    machinegun: 1000,        // 1000 rounds per minute (matches backend)
+    antimaterialrifle: 30,   // 30 rounds per minute
     
-    // Thrown weapons (not used for RPM but included for completeness)
-    smokegrenade: 120,       // Throw rate similar to grenade
-    flashbang: 120           // Throw rate similar to grenade
+    // Thrown weapons - updated to match backend
+    smokegrenade: 60,        // 60 rounds per minute (was 120)
+    flashbang: 60            // 60 rounds per minute (was 120)
   };
   private weaponFireModes: { [key: string]: 'auto' | 'semi' } = {
     // Primary weapons
@@ -104,8 +104,8 @@ export class InputSystem implements IGameSystem {
     flashbang: 'semi'
   };
   private isMouseHeld: boolean = false;
-  private lastFireTime: number = 0;
   private autoFireTimer: number | null = null;
+  private lastShotTime: number = 0; // Track last shot time for rate limiting
 
   constructor(scene: Phaser.Scene) {
     this.scene = scene;
@@ -453,6 +453,22 @@ export class InputSystem implements IGameSystem {
     const isThrownWeapon = weapon === 'grenade' || weapon === 'smokegrenade' || weapon === 'flashbang';
     if (isThrownWeapon) return;
     
+    // Check rate limiting based on weapon RPM
+    const currentTime = Date.now();
+    const rpm = this.weaponRPM[weapon] || 600;
+    const fireInterval = (60 / rpm) * 1000; // Convert RPM to milliseconds between shots
+    
+    if (currentTime - this.lastShotTime < fireInterval) {
+      // Too soon to fire again - rate limited
+      return;
+    }
+    
+    // Check for machine gun overheating
+    if (weapon === 'machinegun' && this.weaponUI && this.weaponUI.isMachinegunOverheated()) {
+      console.log('🔥 Machine gun overheated! Cannot fire.');
+      return;
+    }
+    
     // Check current ammo and trigger auto-reload if empty
     if (this.weaponUI) {
       const ammoData = this.weaponUI.getCurrentWeaponAmmo();
@@ -472,6 +488,9 @@ export class InputSystem implements IGameSystem {
         return; // Don't fire or reload
       }
     }
+    
+    // Update last shot time
+    this.lastShotTime = currentTime;
     
     // Decrease ammo locally for immediate feedback
     this.scene.events.emit('weapon:ammo:decrease', {

@@ -37,6 +37,7 @@ interface PendingShot {
   weaponType: string;
   startPosition: { x: number; y: number };
   timestamp: number;
+  pelletIndex?: number; // Added for shotgun pellets
 }
 
 export class VisualEffectsSystem implements IGameSystem {
@@ -166,25 +167,82 @@ export class VisualEffectsSystem implements IGameSystem {
       if (data.playerId && data.playerId !== localPlayerId) {
         // This is another player firing - show their muzzle flash
         this.showMuzzleFlash(data.position, data.direction, data.weaponType, data.playerId);
-        console.log(`📡 Showing muzzle flash for other player: ${data.playerId}`);
       } else {
-        console.log(`📡 Backend weapon:fired event received for local player ${data.weaponType || 'unknown'} - skipping to avoid double`);
+        // Backend weapon:fired event received for local player - skipping to avoid double
       }
     });
 
     this.scene.events.on('backend:weapon:hit', (data: any) => {
-      console.log(`🎯 Backend weapon hit at (${data.position?.x}, ${data.position?.y})`);
       
       if (data.position) {
         this.showHitMarker(data.position);
         
-        // Debug: log what we're looking for
-        console.log(`🔍 Looking for pending shot: playerId=${data.playerId}, weaponType=${data.weaponType}`);
-        console.log(`🔍 Current pending shots:`, Array.from(this.pendingShots.keys()));
+        let pendingShot: any = null;
+        let pendingKey = '';
         
-        // Find the pending shot to get start position - try exact weapon type first
-        let pendingKey = `${data.playerId}_${data.weaponType}`;
-        let pendingShot = this.pendingShots.get(pendingKey);
+        // Special handling for shotgun - find any available pellet
+        if (data.weaponType === 'shotgun') {
+          // Look for any available shotgun pellet
+          for (let pelletIndex = 0; pelletIndex < 8; pelletIndex++) {
+            const pelletKey = `${data.playerId}_shotgun_pellet_${pelletIndex}`;
+            if (this.pendingShots.has(pelletKey)) {
+              pendingKey = pelletKey;
+              pendingShot = this.pendingShots.get(pelletKey);
+              break;
+            }
+          }
+        } else {
+          // Regular weapons - find exact weapon type
+          pendingKey = `${data.playerId}_${data.weaponType}`;
+          pendingShot = this.pendingShots.get(pendingKey);
+          
+          // Fallback: try without weapon type if backend didn't send it
+          if (!pendingShot && !data.weaponType) {
+            // Try all weapon types
+            const weaponTypes = ['rifle', 'pistol', 'rocket', 'grenade', 'smg', 'shotgun', 
+                                'battlerifle', 'sniperrifle', 'revolver', 'suppressedpistol',
+                                'grenadelauncher', 'machinegun', 'antimaterialrifle'];
+            for (const weapon of weaponTypes) {
+              pendingKey = `${data.playerId}_${weapon}`;
+              pendingShot = this.pendingShots.get(pendingKey);
+              if (pendingShot) {
+                break;
+              }
+            }
+          }
+        }
+        
+        if (pendingShot) {
+          // Show trail from firing position to actual hit position
+          this.showBulletTrail(pendingShot.startPosition, data.position, pendingShot.weaponType || data.weaponType);
+          this.pendingShots.delete(pendingKey);
+        } else if (data.startPosition) {
+          // Fallback to provided start position
+          this.showBulletTrail(data.startPosition, data.position, data.weaponType || 'rifle');
+        }
+      }
+    });
+
+    this.scene.events.on('backend:weapon:miss', (data: any) => {
+      
+      let pendingShot: any = null;
+      let pendingKey = '';
+      
+      // Special handling for shotgun - find any available pellet
+      if (data.weaponType === 'shotgun') {
+        // Look for any available shotgun pellet
+        for (let pelletIndex = 0; pelletIndex < 8; pelletIndex++) {
+          const pelletKey = `${data.playerId}_shotgun_pellet_${pelletIndex}`;
+          if (this.pendingShots.has(pelletKey)) {
+            pendingKey = pelletKey;
+            pendingShot = this.pendingShots.get(pelletKey);
+            break;
+          }
+        }
+      } else {
+        // Regular weapons - find exact weapon type
+        pendingKey = `${data.playerId}_${data.weaponType}`;
+        pendingShot = this.pendingShots.get(pendingKey);
         
         // Fallback: try without weapon type if backend didn't send it
         if (!pendingShot && !data.weaponType) {
@@ -196,45 +254,8 @@ export class VisualEffectsSystem implements IGameSystem {
             pendingKey = `${data.playerId}_${weapon}`;
             pendingShot = this.pendingShots.get(pendingKey);
             if (pendingShot) {
-              console.log(`🔍 Found pending shot with fallback weapon type: ${weapon}`);
               break;
             }
-          }
-        }
-        
-        if (pendingShot) {
-          // Show trail from firing position to actual hit position
-          this.showBulletTrail(pendingShot.startPosition, data.position, pendingShot.weaponType || data.weaponType);
-          this.pendingShots.delete(pendingKey);
-          console.log(`🎯 Bullet trail: ${pendingShot.weaponType || data.weaponType} hit target`);
-        } else if (data.startPosition) {
-          // Fallback to provided start position
-          this.showBulletTrail(data.startPosition, data.position, data.weaponType || 'rifle');
-          console.log(`🎯 Bullet trail: using fallback start position for ${data.weaponType || 'rifle'}`);
-        }
-      }
-    });
-
-    this.scene.events.on('backend:weapon:miss', (data: any) => {
-      console.log(`🎯 Backend weapon miss for player ${data.playerId} with weapon ${data.weaponType}`);
-      console.log(`🔍 Current pending shots:`, Array.from(this.pendingShots.keys()));
-      
-      // Find the pending shot for this player - try exact weapon type first
-      let pendingKey = `${data.playerId}_${data.weaponType}`;
-      let pendingShot = this.pendingShots.get(pendingKey);
-      
-      // Fallback: try without weapon type if backend didn't send it
-      if (!pendingShot && !data.weaponType) {
-        // Try all weapon types
-        const weaponTypes = ['rifle', 'pistol', 'rocket', 'grenade', 'smg', 'shotgun', 
-                            'battlerifle', 'sniperrifle', 'revolver', 'suppressedpistol',
-                            'grenadelauncher', 'machinegun', 'antimaterialrifle'];
-        for (const weapon of weaponTypes) {
-          pendingKey = `${data.playerId}_${weapon}`;
-          pendingShot = this.pendingShots.get(pendingKey);
-          if (pendingShot) {
-            console.log(`🔍 Found pending shot with fallback weapon type: ${weapon}`);
-            break;
           }
         }
       }
@@ -260,16 +281,13 @@ export class VisualEffectsSystem implements IGameSystem {
         
         // Show impact effect at the hit position
         this.showImpactEffect(hitPosition, data.direction);
-        console.log(`🎯 Bullet trail: ${pendingShot.weaponType || data.weaponType} missed target`);
       } else if (data.position) {
         // Fallback: just show impact effect at the position provided
         this.showImpactEffect(data.position, data.direction);
-        console.log(`🎯 No pending shot found, showing impact effect only`);
       }
     });
 
     this.scene.events.on('backend:wall:damaged', (data: any) => {
-      console.log(`🎯 Backend wall damaged at (${data.position?.x}, ${data.position?.y}) by ${data.playerId}`);
       
       if (data.position) {
         this.showWallDamageEffect(data.position, data.material || 'concrete');
@@ -277,24 +295,38 @@ export class VisualEffectsSystem implements IGameSystem {
         
         // Show trail to actual wall hit position
         if (data.playerId) {
-          console.log(`🔍 Looking for wall damage pending shot: playerId=${data.playerId}, weaponType=${data.weaponType}`);
           
-          // Try exact weapon type first
-          let pendingKey = `${data.playerId}_${data.weaponType}`;
-          let pendingShot = this.pendingShots.get(pendingKey);
+          let pendingShot: any = null;
+          let pendingKey = '';
           
-          // Fallback: try without weapon type if backend didn't send it
-          if (!pendingShot && !data.weaponType) {
-            // Try all weapon types
-            const weaponTypes = ['rifle', 'pistol', 'rocket', 'grenade', 'smg', 'shotgun', 
-                                'battlerifle', 'sniperrifle', 'revolver', 'suppressedpistol',
-                                'grenadelauncher', 'machinegun', 'antimaterialrifle'];
-            for (const weapon of weaponTypes) {
-              pendingKey = `${data.playerId}_${weapon}`;
-              pendingShot = this.pendingShots.get(pendingKey);
-              if (pendingShot) {
-                console.log(`🔍 Found pending shot with fallback weapon type: ${weapon}`);
+          // Special handling for shotgun - find any available pellet
+          if (data.weaponType === 'shotgun') {
+            // Look for any available shotgun pellet
+            for (let pelletIndex = 0; pelletIndex < 8; pelletIndex++) {
+              const pelletKey = `${data.playerId}_shotgun_pellet_${pelletIndex}`;
+              if (this.pendingShots.has(pelletKey)) {
+                pendingKey = pelletKey;
+                pendingShot = this.pendingShots.get(pelletKey);
                 break;
+              }
+            }
+          } else {
+            // Regular weapons - find exact weapon type
+            pendingKey = `${data.playerId}_${data.weaponType}`;
+            pendingShot = this.pendingShots.get(pendingKey);
+            
+            // Fallback: try without weapon type if backend didn't send it
+            if (!pendingShot && !data.weaponType) {
+              // Try all weapon types
+              const weaponTypes = ['rifle', 'pistol', 'rocket', 'grenade', 'smg', 'shotgun', 
+                                  'battlerifle', 'sniperrifle', 'revolver', 'suppressedpistol',
+                                  'grenadelauncher', 'machinegun', 'antimaterialrifle'];
+              for (const weapon of weaponTypes) {
+                pendingKey = `${data.playerId}_${weapon}`;
+                pendingShot = this.pendingShots.get(pendingKey);
+                if (pendingShot) {
+                  break;
+                }
               }
             }
           }
@@ -302,9 +334,8 @@ export class VisualEffectsSystem implements IGameSystem {
           if (pendingShot) {
             this.showBulletTrail(pendingShot.startPosition, data.position, pendingShot.weaponType || data.weaponType || 'rifle');
             this.pendingShots.delete(pendingKey);
-            console.log(`🎯 Bullet trail: ${pendingShot.weaponType || data.weaponType} hit wall ${data.wallId}`);
           } else {
-            console.log(`🎯 No pending shot found for wall hit by ${data.playerId} with ${data.weaponType}`);
+            // No pending shot found for wall hit by player
           }
         }
       }
@@ -345,23 +376,48 @@ export class VisualEffectsSystem implements IGameSystem {
       // Store pending shot info for backend response matching
       const socket = (this.scene as any).networkSystem?.getSocket();
       if (socket && socket.id) {
-        const pendingKey = `${socket.id}_${data.weaponType}`;
-        this.pendingShots.set(pendingKey, {
-          sequence: data.sequence,
-          weaponType: data.weaponType,
-          startPosition: { ...data.position },
-          timestamp: data.timestamp
-        });
         
-        console.log(`📝 Stored pending shot: ${pendingKey} for ${data.weaponType}`);
-
-        // Clean up old pending shots after 1 second
-        this.scene.time.delayedCall(1000, () => {
-          if (this.pendingShots.has(pendingKey)) {
-            console.log(`🗑️ Cleaning up expired pending shot: ${pendingKey}`);
-            this.pendingShots.delete(pendingKey);
+        // Handle shotgun specially - store multiple pending shots for pellets
+        if (data.weaponType === 'shotgun') {
+          // Store 8 pending shots for shotgun pellets (shotgun always fires 8 pellets)
+          for (let pelletIndex = 0; pelletIndex < 8; pelletIndex++) {
+            const pendingKey = `${socket.id}_${data.weaponType}_pellet_${pelletIndex}`;
+            this.pendingShots.set(pendingKey, {
+              sequence: data.sequence,
+              weaponType: data.weaponType,
+              startPosition: { ...data.position },
+              timestamp: data.timestamp,
+              pelletIndex: pelletIndex
+            });
           }
-        });
+          
+          // Clean up old pending shots after 2 seconds (longer for shotgun)
+          this.scene.time.delayedCall(2000, () => {
+            for (let pelletIndex = 0; pelletIndex < 8; pelletIndex++) {
+              const pendingKey = `${socket.id}_${data.weaponType}_pellet_${pelletIndex}`;
+              if (this.pendingShots.has(pendingKey)) {
+                this.pendingShots.delete(pendingKey);
+              }
+            }
+          });
+          
+        } else {
+          // Regular weapons - store single pending shot
+          const pendingKey = `${socket.id}_${data.weaponType}`;
+          this.pendingShots.set(pendingKey, {
+            sequence: data.sequence,
+            weaponType: data.weaponType,
+            startPosition: { ...data.position },
+            timestamp: data.timestamp
+          });
+
+          // Clean up old pending shots after 1 second
+          this.scene.time.delayedCall(1000, () => {
+            if (this.pendingShots.has(pendingKey)) {
+              this.pendingShots.delete(pendingKey);
+            }
+          });
+        }
       }
       
       // Handle different weapon types differently
@@ -379,9 +435,7 @@ export class VisualEffectsSystem implements IGameSystem {
                                 'sniperrifle', 'revolver', 'suppressedpistol', 
                                 'machinegun', 'antimaterialrifle'];
         if (hitscanWeapons.includes(data.weaponType)) {
-          console.log(`🎯 Fired ${data.weaponType} - waiting for backend hit result`);
         } else if (data.weaponType) {
-          console.log(`🎯 Fired projectile weapon: ${data.weaponType}`);
         }
       }
     });
@@ -491,7 +545,6 @@ export class VisualEffectsSystem implements IGameSystem {
       }
     });
     
-    console.log(`💥 Impact effect created at (${position.x.toFixed(1)}, ${position.y.toFixed(1)})`);
   }
 
   showWallDamageEffect(position: { x: number; y: number }, material: string = 'concrete'): void {
@@ -594,7 +647,6 @@ export class VisualEffectsSystem implements IGameSystem {
     
     // Debug: Log wall count
     if (wallsData.length === 0) {
-      console.log('🎯 No walls found for collision detection, bullet goes to cursor');
       return targetPos;
     }
     
@@ -625,14 +677,12 @@ export class VisualEffectsSystem implements IGameSystem {
         if (this.isPointInWall(currentX, currentY, wall)) {
           // Hit a wall - find the exact edge for precision
           const edgePoint = this.findWallEdge(startPos, { x: currentX, y: currentY }, wall);
-          console.log(`🎯 Bullet hit wall at (${edgePoint.x.toFixed(1)}, ${edgePoint.y.toFixed(1)}) - stopped before cursor`);
           return edgePoint;
         }
       }
       
       // Check if we're outside game bounds
       if (currentX < 0 || currentX > 480 || currentY < 0 || currentY > 320) {
-        console.log(`🎯 Bullet hit game boundary at (${currentX.toFixed(1)}, ${currentY.toFixed(1)})`);
         return { x: currentX, y: currentY };
       }
     }
@@ -643,7 +693,6 @@ export class VisualEffectsSystem implements IGameSystem {
       y: startPos.y + dirY * 500
     } : targetPos;
     
-    console.log(`🎯 Bullet reached end point at (${finalPoint.x.toFixed(1)}, ${finalPoint.y.toFixed(1)}) - no collision`);
     return finalPoint;
   }
 
@@ -1056,7 +1105,6 @@ export class VisualEffectsSystem implements IGameSystem {
       // Spin faster when thrown harder, but cap it
       projectile.spinSpeed = Math.min(speed * 0.02, 10); // Radians per update
       
-      console.log(`${logEmoji} Created ${projectile.type} projectile ${data.id} with spin speed ${projectile.spinSpeed.toFixed(2)}`);
     }
     
     this.projectiles.set(projectile.id, projectile);
@@ -1199,23 +1247,19 @@ export class VisualEffectsSystem implements IGameSystem {
       switch (projectile.type) {
         case 'rocket':
           this.showExplosionEffect(position, radius || 50);
-          console.log(`🚀 Rocket exploded at (${position.x.toFixed(1)}, ${position.y.toFixed(1)})`);
           break;
           
         case 'grenade':
         case 'grenadelauncher':
           this.showExplosionEffect(position, radius || 40);
-          console.log(`💣 ${projectile.type} exploded at (${position.x.toFixed(1)}, ${position.y.toFixed(1)})`);
           break;
           
         case 'smokegrenade':
           this.showSmokeEffect(position, radius || 60);
-          console.log(`🌫️ Smoke grenade deployed at (${position.x.toFixed(1)}, ${position.y.toFixed(1)})`);
           break;
           
         case 'flashbang':
           this.showFlashbangEffect(position, radius || 100);
-          console.log(`💥 Flashbang detonated at (${position.x.toFixed(1)}, ${position.y.toFixed(1)})`);
           break;
       }
     }

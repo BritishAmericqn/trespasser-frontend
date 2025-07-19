@@ -11,6 +11,20 @@ interface AudioConfig {
   fadeOut?: number;
 }
 
+interface WeaponAudioConfig {
+  volume: number;           // Overall volume (0-1)
+  baseFrequency: number;    // Starting frequency in Hz
+  frequencyDecay: number;   // Ending frequency in Hz
+  duration: number;         // Sound duration in seconds
+  waveType: OscillatorType; // 'sine', 'square', 'sawtooth', 'triangle'
+  filterFreq: number;       // Filter starting frequency
+  filterDecay: number;      // Filter ending frequency
+  filterType: BiquadFilterType; // 'lowpass', 'highpass', 'bandpass'
+  attack: number;           // Attack time in seconds
+  release: number;          // Release time in seconds
+  noise: number;            // Noise level (0-1)
+}
+
 export class AudioManager {
   private audioContext: AudioContext;
   private sounds: Map<string, AudioBuffer[]> = new Map();
@@ -240,6 +254,53 @@ export class AudioManager {
     return this.playSound(soundName, config) !== null;
   }
 
+  /**
+   * Play synthetic weapon sound with optional custom modifications
+   */
+  playSyntheticWeaponSound(weaponType: string, modifications?: {
+    volume?: number;      // Multiply base volume (1.0 = normal, 0.5 = half, 2.0 = double)
+    pitch?: number;       // Multiply base frequency (1.0 = normal, 2.0 = octave up, 0.5 = octave down)
+    duration?: number;    // Multiply base duration (1.0 = normal, 0.5 = half length)
+    muffled?: boolean;    // Apply muffled effect (lower frequency, more filtering)
+    distant?: boolean;    // Apply distance effect (lower volume, more filtering)
+  }): void {
+    if (!this.isInitialized) return;
+
+    let config: Partial<WeaponAudioConfig> = {};
+
+    if (modifications) {
+      const baseConfig = this.getWeaponAudioConfig(weaponType);
+      
+      if (modifications.volume !== undefined) {
+        config.volume = baseConfig.volume * modifications.volume;
+      }
+      
+      if (modifications.pitch !== undefined) {
+        config.baseFrequency = baseConfig.baseFrequency * modifications.pitch;
+        config.frequencyDecay = baseConfig.frequencyDecay * modifications.pitch;
+      }
+      
+      if (modifications.duration !== undefined) {
+        config.duration = baseConfig.duration * modifications.duration;
+      }
+      
+      if (modifications.muffled) {
+        config.filterFreq = (baseConfig.filterFreq || 2000) * 0.3;
+        config.filterDecay = (baseConfig.filterDecay || 500) * 0.3;
+        config.volume = (config.volume || baseConfig.volume) * 0.6;
+        config.noise = (baseConfig.noise || 0.3) * 0.5;
+      }
+      
+      if (modifications.distant) {
+        config.volume = (config.volume || baseConfig.volume) * 0.3;
+        config.filterFreq = (baseConfig.filterFreq || 2000) * 0.5;
+        config.filterDecay = (baseConfig.filterDecay || 500) * 0.5;
+      }
+    }
+
+    this.generateWeaponSound(weaponType, config);
+  }
+
   playImpactSound(material: string, config?: Partial<AudioConfig>): boolean {
     const soundName = `impact_${material}`;
     return this.playSound(soundName, config) !== null;
@@ -259,6 +320,246 @@ export class AudioManager {
     setTimeout(() => {
       this.playSound('shell_drop', { volume: 0.6 });
     }, delay * 1000);
+  }
+
+  /**
+   * Synthetic weapon sound generator with customizable properties
+   */
+  generateWeaponSound(weaponType: string, config?: Partial<WeaponAudioConfig>): void {
+    if (!this.isInitialized || !this.audioContext) {
+      console.warn('AudioManager not initialized - cannot generate weapon sound');
+      return;
+    }
+
+    const weaponConfig = this.getWeaponAudioConfig(weaponType, config);
+    this.playComplexWeaponSound(weaponConfig);
+  }
+
+  private getWeaponAudioConfig(weaponType: string, override?: Partial<WeaponAudioConfig>): WeaponAudioConfig {
+    const defaults: { [key: string]: WeaponAudioConfig } = {
+      // High-pitched, short, crisp
+      pistol: {
+        volume: 0.4,
+        baseFrequency: 1200,
+        frequencyDecay: 400,
+        duration: 0.12,
+        waveType: 'square',
+        filterFreq: 3000,
+        filterDecay: 800,
+        filterType: 'lowpass',
+        attack: 0.001,
+        release: 0.08,
+        noise: 0.3
+      },
+
+      // Suppressed - muffled, low volume
+      suppressedpistol: {
+        volume: 0.15,
+        baseFrequency: 400,
+        frequencyDecay: 150,
+        duration: 0.08,
+        waveType: 'sine',
+        filterFreq: 800,
+        filterDecay: 200,
+        filterType: 'lowpass',
+        attack: 0.002,
+        release: 0.05,
+        noise: 0.1
+      },
+
+      // Deep, powerful revolver
+      revolver: {
+        volume: 0.6,
+        baseFrequency: 800,
+        frequencyDecay: 200,
+        duration: 0.25,
+        waveType: 'square',
+        filterFreq: 2500,
+        filterDecay: 600,
+        filterType: 'lowpass',
+        attack: 0.001,
+        release: 0.15,
+        noise: 0.4
+      },
+
+      // Rapid, medium pitch
+      rifle: {
+        volume: 0.5,
+        baseFrequency: 1000,
+        frequencyDecay: 300,
+        duration: 0.15,
+        waveType: 'sawtooth',
+        filterFreq: 2800,
+        filterDecay: 700,
+        filterType: 'lowpass',
+        attack: 0.001,
+        release: 0.1,
+        noise: 0.35
+      },
+
+      // Higher pitch, faster
+      smg: {
+        volume: 0.35,
+        baseFrequency: 1400,
+        frequencyDecay: 500,
+        duration: 0.08,
+        waveType: 'square',
+        filterFreq: 3500,
+        filterDecay: 1000,
+        filterType: 'lowpass',
+        attack: 0.001,
+        release: 0.05,
+        noise: 0.25
+      },
+
+      // Wide, booming shotgun
+      shotgun: {
+        volume: 0.7,
+        baseFrequency: 600,
+        frequencyDecay: 150,
+        duration: 0.3,
+        waveType: 'square',
+        filterFreq: 1800,
+        filterDecay: 400,
+        filterType: 'lowpass',
+        attack: 0.001,
+        release: 0.2,
+        noise: 0.6
+      },
+
+      // Heavy, deep machine gun
+      machinegun: {
+        volume: 0.5,
+        baseFrequency: 900,
+        frequencyDecay: 250,
+        duration: 0.12,
+        waveType: 'sawtooth',
+        filterFreq: 2200,
+        filterDecay: 500,
+        filterType: 'lowpass',
+        attack: 0.001,
+        release: 0.08,
+        noise: 0.4
+      },
+
+      // Very deep, powerful sniper
+      sniperrifle: {
+        volume: 0.8,
+        baseFrequency: 700,
+        frequencyDecay: 180,
+        duration: 0.4,
+        waveType: 'square',
+        filterFreq: 2000,
+        filterDecay: 400,
+        filterType: 'lowpass',
+        attack: 0.001,
+        release: 0.25,
+        noise: 0.5
+      },
+
+      // Ultra-powerful anti-material
+      antimaterialrifle: {
+        volume: 0.9,
+        baseFrequency: 500,
+        frequencyDecay: 120,
+        duration: 0.5,
+        waveType: 'square',
+        filterFreq: 1500,
+        filterDecay: 300,
+        filterType: 'lowpass',
+        attack: 0.001,
+        release: 0.35,
+        noise: 0.7
+      },
+
+      // Powerful battle rifle
+      battlerifle: {
+        volume: 0.6,
+        baseFrequency: 850,
+        frequencyDecay: 220,
+        duration: 0.18,
+        waveType: 'sawtooth',
+        filterFreq: 2400,
+        filterDecay: 550,
+        filterType: 'lowpass',
+        attack: 0.001,
+        release: 0.12,
+        noise: 0.4
+      }
+    };
+
+    const baseConfig = defaults[weaponType] || defaults.rifle;
+    return { ...baseConfig, ...override };
+  }
+
+  private playComplexWeaponSound(config: WeaponAudioConfig): void {
+    const now = this.audioContext.currentTime;
+    
+    // Main oscillator for the core sound
+    const mainOsc = this.audioContext.createOscillator();
+    const mainGain = this.audioContext.createGain();
+    const filter = this.audioContext.createBiquadFilter();
+    
+    // Noise generator for texture
+    const noiseBuffer = this.createNoiseBuffer(0.1);
+    const noiseSource = this.audioContext.createBufferSource();
+    const noiseGain = this.audioContext.createGain();
+    
+    // Connect main signal chain
+    mainOsc.connect(filter);
+    filter.connect(mainGain);
+    mainGain.connect(this.audioContext.destination);
+    
+    // Connect noise signal chain
+    noiseSource.buffer = noiseBuffer;
+    noiseSource.connect(noiseGain);
+    noiseGain.connect(this.audioContext.destination);
+    
+    // Configure main oscillator
+    mainOsc.type = config.waveType;
+    mainOsc.frequency.setValueAtTime(config.baseFrequency, now);
+    mainOsc.frequency.exponentialRampToValueAtTime(config.frequencyDecay, now + config.duration);
+    
+    // Configure filter
+    filter.type = config.filterType;
+    filter.frequency.setValueAtTime(config.filterFreq, now);
+    filter.frequency.exponentialRampToValueAtTime(config.filterDecay, now + config.duration);
+    filter.Q.setValueAtTime(1, now);
+    
+    // Configure main envelope
+    const mainVolume = config.volume * this.sfxVolume * this.masterVolume;
+    mainGain.gain.setValueAtTime(0, now);
+    mainGain.gain.linearRampToValueAtTime(mainVolume, now + config.attack);
+    mainGain.gain.exponentialRampToValueAtTime(0.001, now + config.duration);
+    
+    // Configure noise envelope
+    const noiseVolume = config.noise * mainVolume * 0.3;
+    noiseGain.gain.setValueAtTime(0, now);
+    noiseGain.gain.linearRampToValueAtTime(noiseVolume, now + config.attack);
+    noiseGain.gain.exponentialRampToValueAtTime(0.001, now + config.duration * 0.7);
+    
+    // Start and stop
+    mainOsc.start(now);
+    mainOsc.stop(now + config.duration);
+    noiseSource.start(now);
+    noiseSource.stop(now + config.duration);
+    
+    // Track active sources for cleanup
+    this.activeSources.push(mainOsc as any);
+    this.activeSources.push(noiseSource as any);
+  }
+
+  private createNoiseBuffer(duration: number): AudioBuffer {
+    const sampleRate = this.audioContext.sampleRate;
+    const frameCount = sampleRate * duration;
+    const buffer = this.audioContext.createBuffer(1, frameCount, sampleRate);
+    const output = buffer.getChannelData(0);
+    
+    for (let i = 0; i < frameCount; i++) {
+      output[i] = Math.random() * 2 - 1;
+    }
+    
+    return buffer;
   }
 
   /**
