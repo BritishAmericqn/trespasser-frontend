@@ -174,14 +174,14 @@ export class AudioManager {
     // Skip file loading completely for now - just use synthetic sounds
     console.log('📂 Skipping file loading - audio files not yet added');
     console.log('🎵 Using synthetic sounds only');
-    console.log('💡 To add real sounds: Download FilmCow library and add files to /src/assets/audio/');
+    console.log('💡 To add real sounds: Download FilmCow library and add files to /assets/audio/');
     
     // TODO: Uncomment this when you've added actual audio files
     /*
     const loadPromises = [
       // When you add audio files, uncomment these:
-      this.loadSoundIfExists('ui_click', '/src/assets/audio/ui/buttons/button_click.ogg'),
-      this.loadSoundIfExists('pistol_shot', '/src/assets/audio/weapons/pistol/shots/pistol_shot_01.ogg'),
+      this.loadSoundIfExists('ui_click', '/assets/audio/ui/buttons/button_click.ogg'),
+      this.loadSoundIfExists('pistol_shot', '/assets/audio/weapons/pistol/shots/pistol_shot_01.ogg'),
       // ... etc
     ];
     
