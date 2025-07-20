@@ -365,6 +365,13 @@ export class ServerConnectionScene extends Phaser.Scene {
   }
 
   private getDefaultServerUrl(): string {
+    // Use environment variable if available (for production)
+    const envBackendUrl = import.meta.env.VITE_BACKEND_URL;
+    if (envBackendUrl) {
+      return envBackendUrl;
+    }
+    
+    // Fallback to dynamic detection for local development
     const hostname = window.location.hostname;
     let serverUrl: string;
     

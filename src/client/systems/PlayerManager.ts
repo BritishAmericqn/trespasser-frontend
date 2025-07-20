@@ -681,4 +681,32 @@ export class PlayerManager {
       sprite.body.setAlpha(1);
     });
   }
+
+  /**
+   * Clear all players during game restart to prevent identity conflicts
+   */
+  clearAllPlayers(): void {
+    console.log('🧹 PlayerManager: Clearing all players for restart');
+    
+    // Remove all visible player sprites
+    for (const [id, sprite] of this.visiblePlayers) {
+      console.log(`🗑️ Removing player sprite: ${id}`);
+      if (sprite.container) {
+        sprite.container.destroy();
+      }
+    }
+    this.visiblePlayers.clear();
+    
+    // Clear ghost data (handled through lastSeenPositions)
+    console.log('🗑️ Clearing ghost/last seen position data');
+    
+    // Clear last seen positions
+    this.lastSeenPositions.clear();
+    
+    // Reset local player ID (will be re-established after restart)
+    console.log(`🔄 Resetting local player ID from: ${this.localPlayerId}`);
+    this.localPlayerId = null;
+    
+    console.log('✅ PlayerManager: All players cleared');
+  }
 } 

@@ -15,6 +15,8 @@ import { AssetManager } from '../utils/AssetManager';
 import { audioManager } from '../systems/AudioManager';
 import { initializeGameAudio, fireWeapon, playUIClick, throwWeapon } from '../systems/AudioIntegration';
 import { audioTest } from '../systems/AudioTest';
+import { NotificationSystem } from '../systems/NotificationSystem';
+import { RestartSystem } from '../systems/RestartSystem';
 
 export class GameScene extends Phaser.Scene {
   private inputSystem!: InputSystem;
@@ -27,6 +29,8 @@ export class GameScene extends Phaser.Scene {
   private playerManager!: PlayerManager;
   private screenShakeSystem!: ScreenShakeSystem;
   private assetManager!: AssetManager;
+  private notificationSystem!: NotificationSystem;
+  private restartSystem!: RestartSystem;
   private playerSprite!: Phaser.GameObjects.Sprite; // Changed from Rectangle to Sprite
   private playerWeapon!: Phaser.GameObjects.Sprite; // Add weapon sprite
   // Player state tracking
@@ -100,6 +104,10 @@ export class GameScene extends Phaser.Scene {
     this.playerManager = new PlayerManager(this);
     this.screenShakeSystem = new ScreenShakeSystem(this);
     
+    // Initialize notification and restart systems
+    this.notificationSystem = new NotificationSystem(this);
+    this.restartSystem = new RestartSystem(this, this.notificationSystem);
+    
     // Connect VisionRenderer to PlayerManager for partial visibility
     this.playerManager.setVisionRenderer(this.visionRenderer);
     
@@ -162,6 +170,8 @@ export class GameScene extends Phaser.Scene {
     this.destructionRenderer.initialize();
     this.weaponUI.initialize();
     this.screenShakeSystem.initialize();
+    this.notificationSystem.initialize();
+    this.restartSystem.initialize();
     
     // Set up client prediction callback
     this.clientPrediction.setPositionCallback((pos) => {
@@ -218,7 +228,7 @@ export class GameScene extends Phaser.Scene {
 
     // Add debug instructions to UI
     const debugText = this.add.text(5, GAME_CONFIG.GAME_HEIGHT - 20, 
-      'Debug: P - toggle pos, B - bullets, N - network, L - loadout, J - join', {
+      'Debug: \\ - admin auth, F - toggle fog', {
       fontSize: '7px',
       color: '#666666'
     }).setOrigin(0, 1);
@@ -289,6 +299,8 @@ export class GameScene extends Phaser.Scene {
     this.destructionRenderer.update(delta);
     this.weaponUI.update(delta);
     this.screenShakeSystem.update(delta);
+    this.notificationSystem.update(delta);
+    this.restartSystem.update(delta);
 
     // Update UI elements
     this.updatePhaserUI();
@@ -1344,7 +1356,7 @@ export class GameScene extends Phaser.Scene {
           `Pos: ${this.playerPosition.x.toFixed(0)},${this.playerPosition.y.toFixed(0)} | Move: ${(speed * 100).toFixed(0)}%`,
           `Wpn: ${currentWeapon || 'None'} ${isADS ? 'ADS' : ''} | Gren: ${grenadeCharge}/5`,
           `FX: F${effectCounts.muzzleFlashes} E${effectCounts.explosions} H${effectCounts.hitMarkers} P${effectCounts.particles}`,
-          `Keys: F=Toggle Fog`
+          `Keys: F=Toggle Fog, \\=Admin Auth`
         ].join('\n'));
       }
     });
@@ -1361,9 +1373,15 @@ export class GameScene extends Phaser.Scene {
       }
     });
 
-    // Debug functionality removed - only fog toggle (F key) remains
+    // Debug keys for restart system testing
+    this.input.keyboard!.on('keydown-BACK_SLASH', () => {
+      console.log('🔑 Testing admin authentication');
+      this.restartSystem.showAuthPrompt();
+    });
 
-    // All debug functionality removed except F key fog toggle
+
+
+    // Debug functionality removed - only fog toggle (F key) and admin auth (\) remain
 
   }
 

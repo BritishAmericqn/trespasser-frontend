@@ -6,5 +6,17 @@ export default defineConfig({
   server: {
     port: 5173,
     host: true
+  },
+  build: {
+    sourcemap: false, // Disable source maps in production for security
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          phaser: ['phaser'],
+          'socket.io': ['socket.io-client'],
+          vendor: ['msgpack-lite']
+        }
+      }
+    }
   }
 }); 

@@ -337,6 +337,38 @@ export class NetworkSystem implements IGameSystem {
         this.scene.events.emit('network:collision', data);
       }
     });
+
+    // Game restart event handlers
+    this.socket.on('game:restarting', (data: any) => {
+      if (this.connectionState === ConnectionState.AUTHENTICATED) {
+        this.scene.events.emit('game:restarting', data);
+      }
+    });
+
+    this.socket.on('game:restarted', (data: any) => {
+      if (this.connectionState === ConnectionState.AUTHENTICATED) {
+        this.scene.events.emit('game:restarted', data);
+      }
+    });
+
+    this.socket.on('game:restart_failed', (data: any) => {
+      if (this.connectionState === ConnectionState.AUTHENTICATED) {
+        this.scene.events.emit('game:restart_failed', data);
+      }
+    });
+
+    // Admin authentication event handlers
+    this.socket.on('admin:authenticated', () => {
+      if (this.connectionState === ConnectionState.AUTHENTICATED) {
+        this.scene.events.emit('admin:authenticated');
+      }
+    });
+
+    this.socket.on('admin:auth-failed', () => {
+      if (this.connectionState === ConnectionState.AUTHENTICATED) {
+        this.scene.events.emit('admin:auth-failed');
+      }
+    });
   }
 
   private setupEventListeners(): void {

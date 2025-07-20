@@ -419,6 +419,13 @@ export class ServerConnectionSceneText extends Phaser.Scene {
   }
 
   private getDefaultServerUrl(): string {
+    // Use environment variable if available (for production)
+    const envBackendUrl = import.meta.env.VITE_BACKEND_URL;
+    if (envBackendUrl) {
+      return envBackendUrl;
+    }
+    
+    // Fallback to dynamic detection for local development
     const hostname = window.location.hostname;
     if (hostname === 'localhost' || hostname === '127.0.0.1') {
       return 'http://localhost:3000';
