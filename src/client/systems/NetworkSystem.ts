@@ -98,7 +98,19 @@ export class NetworkSystem implements IGameSystem {
         this.connectionAttempts = 0;
         this.setConnectionState(ConnectionState.CONNECTED);
         
-        if (serverInfo.passwordRequired) {
+        // ALWAYS authenticate if password is provided (backend team confirmed password required)
+        if (password && password.trim() !== '') {
+          console.log('🔐 Attempting authentication with password...');
+          this.setConnectionState(ConnectionState.AUTHENTICATING);
+          this.socket!.emit('authenticate', password);
+          console.log('📤 Authentication event sent to backend');
+          
+          // Set 5-second timeout for authentication
+          this.authenticationTimeout = window.setTimeout(() => {
+            this.handleAuthenticationTimeout();
+          }, 5000);
+        } else if (serverInfo.passwordRequired) {
+          // Fallback to old logic if no password provided but server requires it
           this.setConnectionState(ConnectionState.AUTHENTICATING);
           this.socket!.emit('authenticate', password);
           
@@ -107,6 +119,7 @@ export class NetworkSystem implements IGameSystem {
             this.handleAuthenticationTimeout();
           }, 5000);
         } else {
+          console.log('⚠️ No password provided and server status unclear - proceeding without auth');
           this.setConnectionState(ConnectionState.AUTHENTICATED);
           this.onGameReady();
         }
@@ -123,9 +136,27 @@ export class NetworkSystem implements IGameSystem {
   async checkServerStatus(serverUrl: string): Promise<ServerInfo> {
     try {
       const response = await fetch(serverUrl);
-      const data = await response.json();
-      return data as ServerInfo;
+      const text = await response.text();
+      console.log('🌐 Server status response (raw):', text);
+      
+      try {
+        const data = JSON.parse(text);
+        console.log('📊 Server status (parsed):', data);
+        return data as ServerInfo;
+      } catch (parseError) {
+        console.warn('⚠️ Server returned non-JSON response, using defaults');
+        // Return default structure if server doesn't return JSON
+        return {
+          game: 'Trespasser',
+          status: 'Running',
+          players: 0,
+          maxPlayers: 10,
+          passwordRequired: true, // Default to requiring password for safety
+          uptime: 0
+        };
+      }
     } catch (error) {
+      console.error('❌ Server status check failed:', error);
       throw new Error('Server is not responding');
     }
   }
