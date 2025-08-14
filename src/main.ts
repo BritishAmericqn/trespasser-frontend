@@ -5,6 +5,10 @@ import { ServerConnectionScene } from './client/scenes/ServerConnectionScene';
 import { ServerConnectionSceneText } from './client/scenes/ServerConnectionSceneText';
 import { ConfigureScene } from './client/scenes/ConfigureScene';
 import { GameScene } from './client/scenes/GameScene';
+import { LobbyMenuScene } from './client/scenes/LobbyMenuScene';
+import { MatchmakingScene } from './client/scenes/MatchmakingScene';
+import { LobbyWaitingScene } from './client/scenes/LobbyWaitingScene';
+import { MatchResultsScene } from './client/scenes/MatchResultsScene';
 
 const config: Phaser.Types.Core.GameConfig = {
   type: Phaser.AUTO,
@@ -20,7 +24,7 @@ const config: Phaser.Types.Core.GameConfig = {
   dom: {
     createContainer: true
   },
-  scene: [LoadingScene, MenuScene, ServerConnectionScene, ServerConnectionSceneText, ConfigureScene, GameScene]
+  scene: [LoadingScene, MenuScene, ServerConnectionScene, ServerConnectionSceneText, ConfigureScene, GameScene, LobbyMenuScene, MatchmakingScene, LobbyWaitingScene, MatchResultsScene]
 };
 
 // Create and start the game

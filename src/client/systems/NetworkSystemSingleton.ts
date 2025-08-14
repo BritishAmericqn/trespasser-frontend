@@ -12,7 +12,9 @@ class NetworkSystemSingleton {
       // Update scene reference without destroying connection
       const currentState = this.instance.getConnectionState();
       const isAuthenticated = this.instance.isAuthenticated();
-      console.log(`NetworkSystemSingleton: Updating scene, current state: ${currentState}, authenticated: ${isAuthenticated}`);
+      const socketConnected = this.instance.isSocketConnected();
+      console.log(`NetworkSystemSingleton: Updating scene from ${this.instance.scene?.scene?.key} to ${scene.scene.key}`);
+      console.log(`  Current state: ${currentState}, authenticated: ${isAuthenticated}, socket connected: ${socketConnected}`);
       
       this.instance.updateScene(scene);
       console.log('NetworkSystemSingleton: Updated scene reference');

@@ -17,6 +17,7 @@ import { initializeGameAudio, fireWeapon, playUIClick, throwWeapon } from '../sy
 import { audioTest } from '../systems/AudioTest';
 import { NotificationSystem } from '../systems/NotificationSystem';
 import { RestartSystem } from '../systems/RestartSystem';
+import { PerformanceMonitor } from '../systems/PerformanceMonitor';
 
 export class GameScene extends Phaser.Scene {
   private inputSystem!: InputSystem;
@@ -31,6 +32,7 @@ export class GameScene extends Phaser.Scene {
   private assetManager!: AssetManager;
   private notificationSystem!: NotificationSystem;
   private restartSystem!: RestartSystem;
+  private performanceMonitor!: PerformanceMonitor;
   private playerSprite!: Phaser.GameObjects.Sprite; // Changed from Rectangle to Sprite
   private playerWeapon!: Phaser.GameObjects.Sprite; // Add weapon sprite
   // Player state tracking
@@ -41,6 +43,11 @@ export class GameScene extends Phaser.Scene {
   private localPlayerId: string | null = null; // Track local player ID
   private playerRotation: number = 0;
   private connectionStatus!: Phaser.GameObjects.Text;
+  
+  // Match state (new lobby system)
+  private killTarget: number = 50; // Default kill target
+  private matchData: any = null;
+  private killCounterContainer!: Phaser.GameObjects.Container;
   
   // Phaser UI elements
   private healthBar!: Phaser.GameObjects.Graphics;
@@ -63,6 +70,13 @@ export class GameScene extends Phaser.Scene {
   init(data: any): void {
     // NetworkSystem singleton will be retrieved in create()
     console.log('GameScene: Initializing');
+    
+    // Handle match data from new lobby system
+    if (data?.matchData) {
+      this.matchData = data.matchData;
+      this.killTarget = data.matchData.killTarget || 50;
+      console.log('🎯 Match initialized with kill target:', this.killTarget);
+    }
     
     // Get configured loadout from registry
     const playerLoadout = this.game.registry.get('playerLoadout');
@@ -96,6 +110,9 @@ export class GameScene extends Phaser.Scene {
     // Get NetworkSystem singleton (will update scene reference)
     this.networkSystem = NetworkSystemSingleton.getInstance(this);
     
+    // Setup match lifecycle event listeners (new lobby system)
+    this.setupMatchLifecycleListeners();
+    
     this.visualEffectsSystem = new VisualEffectsSystem(this);
     this.destructionRenderer = new DestructionRenderer(this);
     this.weaponUI = new WeaponUI(this);
@@ -107,6 +124,7 @@ export class GameScene extends Phaser.Scene {
     // Initialize notification and restart systems
     this.notificationSystem = new NotificationSystem(this);
     this.restartSystem = new RestartSystem(this, this.notificationSystem);
+    this.performanceMonitor = new PerformanceMonitor(this);
     
     // Connect VisionRenderer to PlayerManager for partial visibility
     this.playerManager.setVisionRenderer(this.visionRenderer);
@@ -172,6 +190,10 @@ export class GameScene extends Phaser.Scene {
     this.screenShakeSystem.initialize();
     this.notificationSystem.initialize();
     this.restartSystem.initialize();
+    this.performanceMonitor.initialize();
+    
+    // Create kill counter HUD if in a match
+    this.createKillCounterHUD();
     
     // Set up client prediction callback
     this.clientPrediction.setPositionCallback((pos) => {
@@ -206,33 +228,95 @@ export class GameScene extends Phaser.Scene {
     // Add coordinate debug visualization
     this.addCoordinateDebug();
     
-    // Send player join event with loadout when scene starts
-    if (this.networkSystem && this.networkSystem.isAuthenticated() && playerLoadout) {
-      console.log('🎮 GameScene: Sending player:join with loadout');
-      this.networkSystem.emit('player:join', {
-        loadout: playerLoadout,
-        timestamp: Date.now()
+    // CRITICAL: Create lobby FIRST, then join it!
+    if (this.networkSystem && this.networkSystem.isAuthenticated()) {
+      const socket = this.networkSystem.getSocket();
+      
+      // Set up lobby event listeners FIRST
+      socket?.once('private_lobby_created', (data: any) => {
+        console.log('🎮 Private lobby created:', data.lobbyId);
       });
       
-      // Failsafe: Send again after 1 second in case the first one was too early
-      this.time.delayedCall(1000, () => {
+      socket?.once('lobby_joined', (data: any) => {
+        console.log('🎮 Successfully joined lobby:', data.lobbyId);
+        console.log('🎮 Lobby info:', data);
+        
+        // NOW we can send player:join with loadout
+        if (playerLoadout) {
+          console.log('🎮 GameScene: Sending player:join with loadout to lobby');
+          this.networkSystem.emit('player:join', {
+            loadout: playerLoadout,
+            timestamp: Date.now()
+          });
+          
+          // Also emit match_started in case backend needs it
+          console.log('🎮 Requesting match start for development mode');
+          this.networkSystem.emit('match_started', {});
+          this.networkSystem.emit('request_game_state', {});
+        }
+      });
+      
+      // Create a private lobby for direct connections
+      console.log('🎮 GameScene: Creating private lobby for direct connection');
+      this.networkSystem.emit('create_private_lobby', { 
+        gameMode: 'deathmatch',
+        maxPlayers: 8,
+        password: ''  // No password for dev mode
+      });
+    }
+      
+    // Failsafe: Send again after 1 second in case the first one was too early
+    if (playerLoadout) {
+      this.time.delayedCall(1100, () => {
         if (this.networkSystem && this.networkSystem.isAuthenticated()) {
           console.log('🎮 GameScene: Sending player:join again (failsafe)');
           this.networkSystem.emit('player:join', {
             loadout: playerLoadout,
             timestamp: Date.now()
           });
+          this.networkSystem.emit('request_game_state', {});
+          this.networkSystem.emit('player:ready', {});
         }
       });
     }
 
     // Add debug instructions to UI
     const debugText = this.add.text(5, GAME_CONFIG.GAME_HEIGHT - 20, 
-      'Debug: \\ - admin auth, F - toggle fog', {
+      'Debug: \\ - admin auth, F - toggle fog, T - test mode', {
       fontSize: '7px',
       color: '#666666'
     }).setOrigin(0, 1);
+
+    // Add keyboard shortcut for test mode
+    this.input.keyboard?.on('keydown-T', () => {
+      console.log('🧪 T key pressed - activating test mode');
+      this.forceTestMode();
+    });
     
+    // 🧪 TEST MODE: Add emergency test button
+    const testButton = this.add.text(GAME_CONFIG.GAME_WIDTH - 5, 5, '🧪 TEST MODE', {
+      fontSize: '10px',
+      color: '#ffffff',
+      backgroundColor: '#ff6600',
+      padding: { x: 8, y: 4 },
+      fontFamily: 'monospace'
+    }).setOrigin(1, 0);
+    
+    testButton.setInteractive({ useHandCursor: true });
+    testButton.on('pointerdown', () => {
+      console.log('🧪 TEST MODE: Forcing game to start without backend data');
+      this.forceTestMode();
+    });
+    
+    // Check if we're in test mode (launched directly)
+    const isTestMode = this.game.registry.get('testMode');
+    if (isTestMode) {
+      console.log('🧪 DETECTED TEST MODE FLAG: Auto-activating test mode');
+      this.time.delayedCall(1000, () => {
+        this.forceTestMode();
+      });
+    }
+
     // Start game loop
     console.log('GameScene created successfully');
   }
@@ -301,9 +385,16 @@ export class GameScene extends Phaser.Scene {
     this.screenShakeSystem.update(delta);
     this.notificationSystem.update(delta);
     this.restartSystem.update(delta);
+    this.performanceMonitor.update(delta);
 
     // Update UI elements
     this.updatePhaserUI();
+    
+    // Update kill counter if we have match data
+    if (this.killCounterContainer) {
+      // For now, we'll need to implement this when we get game state data
+      // this.updateKillCounter(gameState);
+    }
     
     // Update debug overlay
     if (this.debugOverlay) {
@@ -1372,6 +1463,15 @@ export class GameScene extends Phaser.Scene {
         console.log(`🌫️ Fog layers toggled - visible: ${newVisibility}`);
       }
     });
+    
+    // G key - Request game state from backend
+    this.input.keyboard!.on('keydown-G', () => {
+      console.log('🎮 Manually requesting game state from backend...');
+      this.networkSystem.emit('request_game_state', {});
+      this.networkSystem.emit('get_game_state', {});
+      this.networkSystem.emit('sync_game_state', {});
+      console.log('📡 Sent multiple game state request variants');
+    });
 
     // Debug keys for restart system testing
     this.input.keyboard!.on('keydown-BACK_SLASH', () => {
@@ -1537,5 +1637,208 @@ export class GameScene extends Phaser.Scene {
     } catch (error) {
       console.error('❌ Failed to initialize audio:', error);
     }
+  }
+
+  /**
+   * Setup match lifecycle event listeners for new lobby system
+   */
+  private setupMatchLifecycleListeners(): void {
+    const socket = this.networkSystem.getSocket();
+    if (!socket) return;
+
+    console.log('🎯 Setting up match lifecycle listeners');
+
+    // Match ended - show results screen
+    socket.on('match_ended', (data: any) => {
+      console.log('🏁 Match ended:', data);
+      this.scene.start('MatchResultsScene', { matchResults: data });
+    });
+
+    // Match starting countdown (if applicable)
+    socket.on('match_starting', (data: any) => {
+      console.log('⏱️ Match starting:', data);
+      // Could show countdown overlay if needed
+    });
+
+    // Kill target reached notification
+    socket.on('kill_target_reached', (data: any) => {
+      console.log('🎯 Kill target reached:', data);
+      // Match should end soon, no action needed
+    });
+  }
+
+  /**
+   * Create kill counter HUD for match progress
+   */
+  private createKillCounterHUD(): void {
+    // Only create if we have a valid kill target
+    if (!this.killTarget || this.killTarget <= 0) return;
+
+    console.log('🎯 Creating kill counter HUD with target:', this.killTarget);
+
+    // Create container for kill counter
+    this.killCounterContainer = this.add.container(GAME_CONFIG.GAME_WIDTH / 2, 20);
+    this.killCounterContainer.setDepth(1000); // High depth to stay on top
+
+    // Background panel
+    const background = this.add.graphics();
+    background.fillStyle(0x000000, 0.8);
+    background.lineStyle(1, 0x444444);
+    background.fillRect(-100, -15, 200, 30);
+    background.strokeRect(-100, -15, 200, 30);
+
+    // Title
+    const title = this.add.text(0, -8, `RACE TO ${this.killTarget} KILLS!`, {
+      fontSize: '8px',
+      color: '#ffffff',
+      fontFamily: 'monospace',
+      fontStyle: 'bold'
+    }).setOrigin(0.5);
+
+    // Team scores (will be updated dynamically)
+    const redScoreText = this.add.text(-60, 5, 'RED: 0', {
+      fontSize: '8px',
+      color: '#ff4444',
+      fontFamily: 'monospace'
+    }).setOrigin(0.5);
+
+    const vsText = this.add.text(0, 5, 'VS', {
+      fontSize: '6px',
+      color: '#888888',
+      fontFamily: 'monospace'
+    }).setOrigin(0.5);
+
+    const blueScoreText = this.add.text(60, 5, 'BLUE: 0', {
+      fontSize: '8px',
+      color: '#4444ff',
+      fontFamily: 'monospace'
+    }).setOrigin(0.5);
+
+    // Add to container
+    this.killCounterContainer.add([background, title, redScoreText, vsText, blueScoreText]);
+
+    // Store references for updating
+    this.killCounterContainer.setData('redScoreText', redScoreText);
+    this.killCounterContainer.setData('blueScoreText', blueScoreText);
+  }
+
+  /**
+   * Update kill counter with current team scores
+   */
+  private updateKillCounter(gameState: any): void {
+    if (!this.killCounterContainer || !gameState.players) return;
+
+    // Calculate team kill counts
+    let redKills = 0;
+    let blueKills = 0;
+
+    Object.values(gameState.players).forEach((player: any) => {
+      if (player.team === 'red') {
+        redKills += player.kills || 0;
+      } else if (player.team === 'blue') {
+        blueKills += player.kills || 0;
+      }
+    });
+
+    // Update display texts
+    const redScoreText = this.killCounterContainer.getData('redScoreText');
+    const blueScoreText = this.killCounterContainer.getData('blueScoreText');
+
+    if (redScoreText) {
+      redScoreText.setText(`RED: ${redKills}/${this.killTarget}`);
+    }
+    if (blueScoreText) {
+      blueScoreText.setText(`BLUE: ${blueKills}/${this.killTarget}`);
+    }
+
+    // Add visual feedback when close to target
+    if (redKills >= this.killTarget - 5 || blueKills >= this.killTarget - 5) {
+      // Flash effect when getting close
+      this.tweens.add({
+        targets: this.killCounterContainer,
+        alpha: 0.7,
+        duration: 500,
+        yoyo: true,
+        repeat: 1,
+        ease: 'Power2'
+      });
+    }
+  }
+
+  // 🧪 TEST MODE: Force game to work without proper backend data
+  private forceTestMode(): void {
+    console.log('🧪 FORCE TEST MODE: Creating complete test environment with map');
+    
+    // Create the map background if it doesn't exist
+    if (!this.backgroundSprite) {
+      this.backgroundSprite = this.add.tileSprite(0, 0, GAME_CONFIG.GAME_WIDTH, GAME_CONFIG.GAME_HEIGHT, 'mapfloor');
+      this.backgroundSprite.setOrigin(0, 0);
+      this.backgroundSprite.setDepth(-1000);
+      console.log('🧪 TEST MODE: Created map background');
+    }
+
+    // Create some test walls if collision system exists
+    if (this.collisionSystem) {
+      // Add a few test walls
+      const testWalls = [
+        { x: 100, y: 100, width: 20, height: 60 },
+        { x: 300, y: 150, width: 20, height: 60 },
+        { x: 200, y: 200, width: 60, height: 20 }
+      ];
+      
+      testWalls.forEach(wall => {
+        this.collisionSystem.addWall(wall.x, wall.y, wall.width, wall.height);
+      });
+      console.log('🧪 TEST MODE: Added test walls');
+    }
+    
+    // Create a minimal test player
+    const testPlayer = {
+      id: 'test-player-' + Date.now(),
+      position: { x: 240, y: 135 }, // Center of screen
+      rotation: 0,
+      scale: { x: 1, y: 1 },
+      velocity: { x: 0, y: 0 },
+      team: this.playerLoadout?.team || 'blue',
+      health: 100,
+      isLocal: true
+    };
+
+    // Add to player manager
+    this.playerManager.updatePlayer(testPlayer);
+    this.playerManager.setLocalPlayerId(testPlayer.id);
+
+    // Create minimal game state with proper map data
+    const testGameState = {
+      timestamp: Date.now(),
+      players: [testPlayer],
+      visiblePlayers: [testPlayer],
+      projectiles: [],
+      destructionUpdates: [],
+      vision: null,
+      map: {
+        width: GAME_CONFIG.GAME_WIDTH,
+        height: GAME_CONFIG.GAME_HEIGHT,
+        walls: [
+          { x: 100, y: 100, width: 20, height: 60 },
+          { x: 300, y: 150, width: 20, height: 60 },
+          { x: 200, y: 200, width: 60, height: 20 }
+        ]
+      }
+    };
+
+    // Process this as if it came from backend
+    this.events.emit('network:gameState', testGameState);
+
+    // Force enable input system (InputSystem doesn't have setEnabled method)
+    if (this.inputSystem) {
+      console.log('🧪 TEST MODE: Input system already initialized and ready');
+      // The input system is automatically active once initialized
+    }
+
+    console.log('🧪 TEST MODE: Complete game environment created');
+    console.log('🧪 You should now see the map and be able to move around with WASD');
+    console.log('🧪 This includes map background, walls, and player movement');
+    console.log('🧪 This bypasses all backend dependencies for testing');
   }
 } 

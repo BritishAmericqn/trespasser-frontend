@@ -64,9 +64,9 @@ export class ServerConnectionScene extends Phaser.Scene {
 
   private createUI(): void {
     // Title
-    const title = this.add.text(GAME_CONFIG.GAME_WIDTH / 2, 20, 'SERVER CONNECTION', {
+    const title = this.add.text(GAME_CONFIG.GAME_WIDTH / 2, 20, 'PRIVATE SERVER CONNECTION', {
       fontSize: '16px',
-      color: '#00ff00',
+      color: '#ffaa00',
       fontStyle: 'bold',
       fontFamily: 'monospace'
     }).setOrigin(0.5);
@@ -106,7 +106,7 @@ export class ServerConnectionScene extends Phaser.Scene {
     this.serverUrlInput = this.add.dom(containerX, containerY - 25).createFromHTML(serverInputHTML);
 
     // Password section
-    const passwordLabel = this.add.text(0, 5, 'Password (optional):', {
+    const passwordLabel = this.add.text(0, 5, 'Password (required for private):', {
       fontSize: '10px',
       color: '#ffffff',
       fontFamily: 'monospace'
@@ -145,8 +145,16 @@ export class ServerConnectionScene extends Phaser.Scene {
     });
     this.connectButton.on('pointerdown', () => this.handleConnectClick());
 
+    // Info text about public servers
+    const infoText = this.add.text(0, -70, 'Note: Public servers require no password.\nUse "🚀 INSTANT PLAY" for quick access!', {
+      fontSize: '8px',
+      color: '#888888',
+      align: 'center',
+      fontFamily: 'monospace'
+    }).setOrigin(0.5);
+
     // Add text elements to main container (DOM elements positioned absolutely)
-    this.mainContainer.add([serverLabel, passwordLabel, this.connectButton]);
+    this.mainContainer.add([serverLabel, passwordLabel, this.connectButton, infoText]);
 
     // Status text below the container
     this.statusText = this.add.text(containerX, containerY + 100, 'Ready to connect', {
