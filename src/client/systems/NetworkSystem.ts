@@ -468,6 +468,14 @@ export class NetworkSystem implements IGameSystem {
       }
     });
     
+    // Listen for flashbang effect events
+    this.socket.on('FLASHBANG_EFFECT', (data: any) => {
+      if (this.connectionState === ConnectionState.AUTHENTICATED) {
+        console.log('💥 Flashbang effect received:', data);
+        this.scene.events.emit('backend:flashbang:effect', data);
+      }
+    });
+    
     // Listen for collision events
     this.socket.on('player:collision', (data: any) => {
       if (this.connectionState === ConnectionState.AUTHENTICATED) {

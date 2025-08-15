@@ -35,6 +35,11 @@ export class GameScene extends Phaser.Scene {
   private performanceMonitor!: PerformanceMonitor;
   private playerSprite!: Phaser.GameObjects.Sprite; // Changed from Rectangle to Sprite
   private playerWeapon!: Phaser.GameObjects.Sprite; // Add weapon sprite
+  // Smoke and flashbang systems
+  private smokeZoneGraphics!: Phaser.GameObjects.Graphics;
+  private smokeParticles: Map<string, any[]> = new Map();
+  private flashbangOverlay!: Phaser.GameObjects.Rectangle;
+  private flashbangActive: boolean = false;
   // Player state tracking
   private playerPosition: { x: number; y: number } = { x: 240, y: 135 };
   private lastGameStateTime: number = 0;
@@ -248,6 +253,22 @@ export class GameScene extends Phaser.Scene {
     this.notificationSystem.initialize();
     this.restartSystem.initialize();
     this.performanceMonitor.initialize();
+    
+    // Initialize smoke and flashbang graphics
+    this.smokeZoneGraphics = this.add.graphics();
+    this.smokeZoneGraphics.setDepth(45); // Above most effects but below UI
+    
+    // Create flashbang overlay (hidden initially)
+    this.flashbangOverlay = this.add.rectangle(
+      GAME_CONFIG.GAME_WIDTH / 2,
+      GAME_CONFIG.GAME_HEIGHT / 2,
+      GAME_CONFIG.GAME_WIDTH,
+      GAME_CONFIG.GAME_HEIGHT,
+      0xFFFFFF
+    );
+    this.flashbangOverlay.setDepth(100); // Above everything
+    this.flashbangOverlay.setAlpha(0); // Start hidden
+    this.flashbangOverlay.setScrollFactor(0); // UI layer
     
     // Create kill counter HUD if in a match
     this.createKillCounterHUD();
@@ -1025,6 +1046,11 @@ export class GameScene extends Phaser.Scene {
           }
         }
       }
+      
+      // Handle smoke zones from game state
+      if ((gameState as any).smokeZones && Array.isArray((gameState as any).smokeZones)) {
+        this.renderSmokeZones((gameState as any).smokeZones);
+      }
     });
     
     // Listen for collision events
@@ -1091,6 +1117,11 @@ export class GameScene extends Phaser.Scene {
         // Also sync our player position when backend sends position data
         this.applyBackendPosition(data.position);
       }
+    });
+    
+    // Listen for flashbang effects
+    this.events.on('backend:flashbang:effect', (data: any) => {
+      this.handleFlashbangEffect(data);
     });
     
     // Listen for ANY backend event with position data
@@ -2128,5 +2159,331 @@ export class GameScene extends Phaser.Scene {
     console.log('🧪 You should now see the map and be able to move around with WASD');
     console.log('🧪 This includes map background, walls, and player movement');
     console.log('🧪 This bypasses all backend dependencies for testing');
+  }
+  
+  // Render smoke zones from game state
+  private renderSmokeZones(smokeZones: any[]): void {
+    // Clear previous smoke graphics
+    this.smokeZoneGraphics.clear();
+    
+    // Iterate through each smoke zone
+    for (const smoke of smokeZones) {
+      const age = Date.now() - smoke.createdAt;
+      
+      // Skip if expired - adjusted for 15 seconds
+      const smokeDuration = smoke.duration || 15000; // Default to 15 seconds
+      if (age > smokeDuration) continue;
+      
+      // Calculate current radius with smoother expansion
+      let currentRadius = smoke.radius;
+      const expansionTime = smoke.expansionTime || 2000; // 2 seconds to expand
+      if (age < expansionTime) {
+        // Smooth easing for expansion
+        const expansionProgress = this.easeOutCubic(age / expansionTime);
+        currentRadius = 10 + (smoke.maxRadius - 10) * expansionProgress;
+      } else {
+        currentRadius = smoke.maxRadius || 60;
+      }
+      
+      // Calculate opacity with better fade timing for 15 seconds
+      let opacity = smoke.density || 0.9;
+      const timeLeft = smokeDuration - age;
+      
+      // Fade in during first second
+      if (age < 1000) {
+        opacity *= age / 1000;
+      }
+      // Fade out during last 3 seconds
+      else if (timeLeft < 3000) {
+        opacity *= timeLeft / 3000;
+      }
+      
+      // Animated time-based offset for swirling effect
+      const timeOffset = age * 0.0005; // Slow rotation
+      
+      // Draw main circular smoke cloud with gradient effect
+      // Center is denser, edges are lighter
+      const layers = 5; // Multiple layers for depth
+      for (let layer = layers - 1; layer >= 0; layer--) {
+        const layerScale = 1 - (layer * 0.15); // Each layer is smaller
+        const layerOpacity = opacity * (0.3 + (layer * 0.14)); // Outer layers more transparent
+        const layerRadius = currentRadius * (1 + (layer * 0.08)); // Outer layers slightly larger
+        
+        // Animated offset for this layer
+        const layerAngle = timeOffset * (1 + layer * 0.2);
+        const offsetX = Math.cos(layerAngle) * (layer * 2);
+        const offsetY = Math.sin(layerAngle) * (layer * 2);
+        
+        // Gradient colors from light gray to darker gray
+        const grayValue = 0x80 + (layer * 0x10); // Lighter on outside
+        const color = (grayValue << 16) | (grayValue << 8) | grayValue;
+        
+        this.smokeZoneGraphics.fillStyle(color, layerOpacity);
+        this.smokeZoneGraphics.fillCircle(
+          smoke.position.x + offsetX,
+          smoke.position.y + offsetY,
+          layerRadius * layerScale
+        );
+      }
+      
+      // Add animated wispy circles around the edge for organic look
+      const wisps = 6;
+      for (let i = 0; i < wisps; i++) {
+        const wispAngle = (Math.PI * 2 * i) / wisps + timeOffset;
+        const wispDist = currentRadius * 0.6;
+        const wispX = smoke.position.x + Math.cos(wispAngle) * wispDist;
+        const wispY = smoke.position.y + Math.sin(wispAngle) * wispDist;
+        
+        // Animated size pulse
+        const sizePulse = 1 + Math.sin(age * 0.002 + i) * 0.1;
+        const wispRadius = currentRadius * 0.4 * sizePulse;
+        
+        this.smokeZoneGraphics.fillStyle(0xAAAAAA, opacity * 0.3);
+        this.smokeZoneGraphics.fillCircle(wispX, wispY, wispRadius);
+      }
+      
+      // Create or update smoke particles for this zone
+      if (!this.smokeParticles.has(smoke.id)) {
+        this.createSmokeParticles(smoke);
+      }
+      this.updateSmokeParticles(smoke);
+    }
+    
+    // Clean up particles for expired smoke zones
+    const activeZoneIds = new Set(smokeZones.map(z => z.id));
+    for (const [zoneId, particles] of this.smokeParticles.entries()) {
+      if (!activeZoneIds.has(zoneId)) {
+        // Fade out and remove particles
+        particles.forEach(p => {
+          if (p.sprite && !p.sprite.scene) return; // Already destroyed
+          p.sprite?.destroy();
+        });
+        this.smokeParticles.delete(zoneId);
+      }
+    }
+  }
+  
+  // Handle flashbang effect from backend
+  private handleFlashbangEffect(data: any): void {
+    const myPlayerId = this.networkSystem.getSocket()?.id;
+    if (!myPlayerId) return;
+    
+    // Find if local player was affected
+    const myEffect = data.affectedPlayers.find((p: any) => p.playerId === myPlayerId);
+    
+    if (myEffect) {
+      console.log('⚡ Local player flashbanged!', myEffect);
+      this.applyFlashbangEffect(myEffect);
+    }
+  }
+  
+  // Apply flashbang visual and audio effects
+  private applyFlashbangEffect(effect: any): void {
+    // Prevent multiple simultaneous flashbangs
+    if (this.flashbangActive) return;
+    this.flashbangActive = true;
+    
+    const phases = effect.phases;
+    
+    // PHASE 1: BLIND (white screen)
+    this.flashbangOverlay.setAlpha(effect.intensity * 0.95);
+    this.flashbangOverlay.setVisible(true);
+    
+    // Camera shake based on intensity
+    if (effect.intensity > 0.5) {
+      this.cameras.main.shake(500, 0.01 * effect.intensity);
+    }
+    
+    // Play ringing sound (if audio system available)
+    this.playFlashbangAudio(effect.intensity);
+    
+    // PHASE 2: DISORIENTED (partial vision, blur)
+    this.time.delayedCall(phases.blindDuration, () => {
+      // Reduce white overlay opacity
+      this.tweens.add({
+        targets: this.flashbangOverlay,
+        alpha: effect.intensity * 0.5,
+        duration: 300,
+        ease: 'Power2'
+      });
+      
+      // Add blur effect if possible
+      // Note: Phaser doesn't have built-in blur, but we can simulate with alpha
+      this.cameras.main.setAlpha(0.7);
+    });
+    
+    // PHASE 3: RECOVERING (slight impairment)
+    this.time.delayedCall(phases.blindDuration + phases.disorientedDuration, () => {
+      // Further reduce overlay
+      this.tweens.add({
+        targets: this.flashbangOverlay,
+        alpha: effect.intensity * 0.2,
+        duration: 500,
+        ease: 'Power2'
+      });
+      
+      // Restore camera alpha
+      this.cameras.main.setAlpha(0.9);
+    });
+    
+    // PHASE 4: NORMAL (remove all effects)
+    this.time.delayedCall(effect.duration, () => {
+      // Fade out completely
+      this.tweens.add({
+        targets: this.flashbangOverlay,
+        alpha: 0,
+        duration: 500,
+        ease: 'Power2',
+        onComplete: () => {
+          this.flashbangOverlay.setVisible(false);
+          this.flashbangActive = false;
+        }
+      });
+      
+      // Restore camera
+      this.cameras.main.setAlpha(1);
+      
+      // Restore audio volume
+      this.restoreAudioVolume();
+    });
+  }
+  
+  // Play flashbang audio effects
+  private playFlashbangAudio(intensity: number): void {
+    // Reduce game volume
+    if (audioManager) {
+      // Store original volume (default to 1 if not previously stored)
+      if ((this as any).originalAudioVolume === undefined) {
+        (this as any).originalAudioVolume = 1;
+      }
+      
+      // Set reduced volume
+      audioManager.setMasterVolume((this as any).originalAudioVolume * (1 - intensity * 0.8));
+    }
+    
+    // TODO: Play ringing sound when audio file is available
+    // audioManager.playSound('flashbang_ringing', { volume: intensity * 0.7 });
+  }
+  
+  // Restore audio volume after flashbang
+  private restoreAudioVolume(): void {
+    if (audioManager && (this as any).originalAudioVolume !== undefined) {
+      // Gradually restore volume
+      const targetVolume = (this as any).originalAudioVolume;
+      let currentVolume = (this as any).originalAudioVolume * 0.2; // Start from reduced volume
+      
+      const restoreInterval = setInterval(() => {
+        currentVolume = Math.min(targetVolume, currentVolume + 0.02);
+        audioManager.setMasterVolume(currentVolume);
+        
+        if (currentVolume >= targetVolume) {
+          clearInterval(restoreInterval);
+          delete (this as any).originalAudioVolume;
+        }
+      }, 100);
+    }
+  }
+  
+  // Easing function for smooth animations
+  private easeOutCubic(t: number): number {
+    return 1 - Math.pow(1 - t, 3);
+  }
+  
+  // Create smoke particles for a smoke zone
+  private createSmokeParticles(smoke: any): void {
+    const particles: any[] = [];
+    
+    // Create more particles for better effect
+    for (let i = 0; i < 15; i++) {
+      const particle = this.add.graphics();
+      particle.setDepth(44);
+      
+      // Random starting position in a circle
+      const angle = (Math.PI * 2 * i) / 15 + Math.random() * 0.5;
+      const dist = Math.random() * 15;
+      const x = smoke.position.x + Math.cos(angle) * dist;
+      const y = smoke.position.y + Math.sin(angle) * dist;
+      
+      particle.x = x;
+      particle.y = y;
+      
+      // Draw initial particle
+      const initialOpacity = 0.2 + Math.random() * 0.15;
+      particle.fillStyle(0xC0C0C0, initialOpacity);
+      particle.fillCircle(0, 0, 4 + Math.random() * 3);
+      
+      particles.push({
+        sprite: particle,
+        vx: (Math.random() - 0.5) * 0.2, // Slower drift
+        vy: (Math.random() - 0.5) * 0.2 - 0.1, // Slight upward bias
+        baseSize: 4 + Math.random() * 3,
+        growthRate: 0.08 + Math.random() * 0.12,
+        rotationSpeed: (Math.random() - 0.5) * 0.001,
+        angle: angle,
+        originalDist: dist
+      });
+    }
+    
+    this.smokeParticles.set(smoke.id, particles);
+  }
+  
+  // Update smoke particles animation
+  private updateSmokeParticles(smoke: any): void {
+    const particles = this.smokeParticles.get(smoke.id);
+    if (!particles) return;
+    
+    const age = Date.now() - smoke.createdAt;
+    const smokeDuration = smoke.duration || 15000; // 15 seconds
+    const expansionTime = smoke.expansionTime || 2000;
+    const expansionProgress = Math.min(1, age / expansionTime);
+    
+    // Calculate opacity based on smoke lifetime
+    let baseOpacity = smoke.density || 0.9;
+    const timeLeft = smokeDuration - age;
+    
+    // Fade in/out timing for 15 seconds
+    if (age < 1000) {
+      baseOpacity *= age / 1000;
+    } else if (timeLeft < 3000) {
+      baseOpacity *= timeLeft / 3000;
+    }
+    
+    particles.forEach((p, index) => {
+      if (!p.sprite || !p.sprite.scene) return;
+      
+      // Circular drift with slight turbulence
+      p.angle += p.rotationSpeed;
+      
+      // Update position with drift and rotation
+      p.sprite.x += p.vx + Math.cos(p.angle) * 0.05;
+      p.sprite.y += p.vy + Math.sin(p.angle) * 0.05;
+      
+      // Grow particles over time
+      const growthFactor = 1 + expansionProgress * p.growthRate * 2;
+      const size = p.baseSize * growthFactor;
+      
+      // Particle opacity based on position and age
+      const distFromCenter = Math.sqrt(
+        Math.pow(p.sprite.x - smoke.position.x, 2) + 
+        Math.pow(p.sprite.y - smoke.position.y, 2)
+      );
+      const distanceFade = 1 - (distFromCenter / (smoke.maxRadius * 1.2));
+      const particleOpacity = baseOpacity * 0.3 * Math.max(0, distanceFade);
+      
+      // Redraw particle with updated properties
+      p.sprite.clear();
+      p.sprite.fillStyle(0xB8B8B8, particleOpacity);
+      p.sprite.fillCircle(0, 0, size);
+      
+      // Keep particles within reasonable bounds and respawn if too far
+      if (distFromCenter > smoke.maxRadius * 0.9) {
+        // Respawn particle near center
+        const newAngle = Math.random() * Math.PI * 2;
+        const newDist = Math.random() * 20;
+        p.sprite.x = smoke.position.x + Math.cos(newAngle) * newDist;
+        p.sprite.y = smoke.position.y + Math.sin(newAngle) * newDist;
+        p.angle = newAngle;
+      }
+    });
   }
 } 

@@ -207,8 +207,48 @@ export class InputSystem implements IGameSystem {
     this.scene.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
       // Get world coordinates instead of screen coordinates
       const worldPoint = this.scene.cameras.main.getWorldPoint(pointer.x, pointer.y);
-      this.inputState.mouse.x = Math.round(worldPoint.x);
-      this.inputState.mouse.y = Math.round(worldPoint.y);
+      let mouseX = Math.round(worldPoint.x);
+      let mouseY = Math.round(worldPoint.y);
+      
+      // Apply flashbang movement impairment if player is affected
+      const gameScene = this.scene as any;
+      const gameState = gameScene.gameState;
+      const myPlayerId = gameScene.networkSystem?.getSocket()?.id;
+      
+      if (gameState && myPlayerId && gameState.players) {
+        const myPlayer = gameState.players[myPlayerId];
+        if (myPlayer?.effectState?.movementImpairment > 0) {
+          const impairment = myPlayer.effectState.movementImpairment;
+          
+          // Store last mouse position if not already stored
+          if (!(this as any).lastMouseX) {
+            (this as any).lastMouseX = mouseX;
+            (this as any).lastMouseY = mouseY;
+          }
+          
+          // Reduce sensitivity based on impairment
+          const sensitivityReduction = 1 - (impairment * 0.5);
+          mouseX = (this as any).lastMouseX + (mouseX - (this as any).lastMouseX) * sensitivityReduction;
+          mouseY = (this as any).lastMouseY + (mouseY - (this as any).lastMouseY) * sensitivityReduction;
+          
+          // Add random jitter for disorientation
+          if (Math.random() < impairment * 0.3) {
+            mouseX += (Math.random() - 0.5) * 10 * impairment;
+            mouseY += (Math.random() - 0.5) * 10 * impairment;
+          }
+          
+          // Update stored position
+          (this as any).lastMouseX = mouseX;
+          (this as any).lastMouseY = mouseY;
+        } else {
+          // Clear stored position when not impaired
+          delete (this as any).lastMouseX;
+          delete (this as any).lastMouseY;
+        }
+      }
+      
+      this.inputState.mouse.x = mouseX;
+      this.inputState.mouse.y = mouseY;
       
       // Update player rotation based on mouse position
       this.updatePlayerRotation();
