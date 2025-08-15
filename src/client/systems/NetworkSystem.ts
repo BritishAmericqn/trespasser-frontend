@@ -27,11 +27,15 @@ export class NetworkSystem implements IGameSystem {
   private socket: Socket | null = null;
   private isConnected: boolean = false;
   private connectionAttempts: number = 0;
-  private readonly MAX_RECONNECT_ATTEMPTS = 5;
+  private readonly MAX_RECONNECT_ATTEMPTS = 3; // Reduced to avoid rate limits
   private inputsSent: number = 0;
   private connectionState: ConnectionState = ConnectionState.DISCONNECTED;
   private currentServerUrl: string = '';
   private authenticationTimeout: number | null = null;
+  private firstGameStateReceived: boolean = false;
+  private connectionInProgress: boolean = false; // Prevent multiple concurrent connection attempts
+  private lastGameStateLog: number = 0;
+  private firstWallsForwarded: boolean = false;
 
   constructor(scene: Phaser.Scene) {
     this.scene = scene;
@@ -81,13 +85,20 @@ export class NetworkSystem implements IGameSystem {
     console.log(`🔌 DETAILED: Current connection state: ${this.isConnected ? 'CONNECTED' : 'DISCONNECTED'}`);
     console.log(`🔌 DETAILED: Existing socket: ${!!this.socket}, connected: ${this.socket?.connected}`);
     
+    // Check if connection is already in progress
+    if (this.connectionInProgress) {
+      console.log('⚠️ Connection already in progress, ignoring duplicate request');
+      return;
+    }
+    
     // CRITICAL FIX: Don't create new connection if already connected!
     if (this.socket && this.socket.connected) {
       console.log('⚠️ ALREADY CONNECTED! Not creating new connection.');
-      console.log(`Current URL: ${this.socket.io.uri}, Requested URL: ${serverUrl}`);
+      const currentUrl = (this.socket.io as any).uri || this.currentServerUrl;
+      console.log(`Current URL: ${currentUrl}, Requested URL: ${serverUrl}`);
       
       // If same server, just ensure we're authenticated
-      if (this.socket.io.uri === serverUrl) {
+      if (currentUrl === serverUrl) {
         console.log('Same server, checking authentication state...');
         if (this.connectionState === ConnectionState.AUTHENTICATED) {
           console.log('Already authenticated, triggering game ready');
@@ -101,6 +112,8 @@ export class NetworkSystem implements IGameSystem {
       }
     }
     
+    // Mark connection as in progress
+    this.connectionInProgress = true;
     this.setConnectionState(ConnectionState.CONNECTING);
     
     try {
@@ -111,8 +124,8 @@ export class NetworkSystem implements IGameSystem {
         transports: ['websocket'],
         timeout: 5000,
         reconnection: true,
-        reconnectionDelay: 1000,
-        reconnectionDelayMax: 5000,
+        reconnectionDelay: 2000,
+        reconnectionDelayMax: 10000,
         reconnectionAttempts: this.MAX_RECONNECT_ATTEMPTS
       });
       
@@ -127,8 +140,8 @@ export class NetworkSystem implements IGameSystem {
         transports: ['websocket'],
         timeout: 5000,
         reconnection: true,
-        reconnectionDelay: 1000,
-        reconnectionDelayMax: 5000,
+        reconnectionDelay: 2000,        // Increased from 1000ms to 2000ms
+        reconnectionDelayMax: 10000,    // Increased from 5000ms to 10000ms
         reconnectionAttempts: this.MAX_RECONNECT_ATTEMPTS,
         autoConnect: false  // Don't connect immediately
       });
@@ -143,6 +156,7 @@ export class NetworkSystem implements IGameSystem {
         console.log(`🔌 DETAILED: Socket.IO connected successfully to ${serverUrl}!`);
         this.isConnected = true;
         this.connectionAttempts = 0;
+        this.connectionInProgress = false; // Clear the flag on success
         this.setConnectionState(ConnectionState.CONNECTED);
         
         // 🔥 NEW: No-password public server support
@@ -181,6 +195,7 @@ export class NetworkSystem implements IGameSystem {
       
     } catch (error) {
       console.error('Failed to connect to server:', error);
+      this.connectionInProgress = false; // Clear the flag on error
       this.setConnectionState(ConnectionState.FAILED);
       this.scene.events.emit('network:connectionError', `Failed to connect: ${error}`);
     }
@@ -245,9 +260,19 @@ export class NetworkSystem implements IGameSystem {
   private setupSocketListeners(): void {
     if (!this.socket) return;
 
-    // Add debug listener for weapon/combat events only
+    // Debug listener - log ALL events for debugging
     this.socket.onAny((eventName, data) => {
-      console.log(`📥 BACKEND EVENT: ${eventName}`, data);
+      // Special handling for game:state to see if we're getting walls
+      if (eventName === 'game:state') {
+        const wallCount = data?.walls ? Object.keys(data.walls).length : 0;
+        const playerCount = Object.keys(data?.players || {}).length;
+        // console.log(`📥 BACKEND EVENT: "game:state" - ${wallCount} walls, ${playerCount} players`);
+      } else if (eventName === 'player:updated') {
+        // Skip player:updated to reduce spam
+        return;
+      } else {
+        console.log(`📥 BACKEND EVENT: ${eventName}`);
+      }
     });
 
     // Remove the old connect handler since we handle it in connectToServer
@@ -256,6 +281,7 @@ export class NetworkSystem implements IGameSystem {
       console.error(`❌ SOCKET DISCONNECTED! Reason: ${reason}`);
       console.error('Stack trace:', new Error().stack);
       this.isConnected = false;
+      this.connectionInProgress = false; // Clear the flag on disconnect
       
       // Only update state if we're not just switching scenes
       if (reason !== 'io client disconnect') {
@@ -268,8 +294,8 @@ export class NetworkSystem implements IGameSystem {
 
     this.socket.on('connect_error', (error) => {
       console.error(`🔌 DETAILED: Socket connection error:`, error);
-      console.error(`🔌 DETAILED: Error type: ${error.type}`);
-      console.error(`🔌 DETAILED: Error description: ${error.description}`);
+      console.error(`🔌 DETAILED: Error type: ${(error as any).type}`);
+      console.error(`🔌 DETAILED: Error description: ${(error as any).description}`);
       console.error(`🔌 DETAILED: Attempt ${this.connectionAttempts + 1}/${this.MAX_RECONNECT_ATTEMPTS}`);
       
       this.connectionAttempts++;
@@ -315,15 +341,31 @@ export class NetworkSystem implements IGameSystem {
       this.scene.events.emit('network:connectionError', message);
     });
 
-        // Listen for game state updates from server
+    // Listen for game state updates from server
     this.socket.on(EVENTS.GAME_STATE, (gameState: any) => {
-      // Only process game events if authenticated
-      if (this.connectionState === ConnectionState.AUTHENTICATED) {
-        console.log('📨 GAME STATE RECEIVED! Scene:', this.scene.scene.key);
-        console.log('  - Players:', Object.keys(gameState.players || {}).length);
-        console.log('  - Walls:', (gameState.walls || []).length);
-        console.log('  - Vision:', !!gameState.vision);
-        this.scene.events.emit('network:gameState', gameState);
+      // Log game state reception
+      const wallCount = gameState.walls ? Object.keys(gameState.walls).length : 0;
+      const playerCount = Object.keys(gameState.players || {}).length;
+      
+      // console.log('📨 Game State Received:', {
+      //   walls: wallCount,
+      //   players: playerCount,
+      //   vision: !!gameState.vision,
+      //   visiblePlayers: gameState.visiblePlayers ? Object.keys(gameState.visiblePlayers).length : 0
+      // });
+      
+      // Get the active GameScene
+      const sceneManager = this.scene.game.scene;
+      const gameScene = sceneManager.getScene('GameScene');
+      
+      // Forward to GameScene if it exists and is active
+      if (gameScene && gameScene.scene.isActive()) {
+        // console.log('✅ Forwarding game state to GameScene');
+        gameScene.events.emit('network:gameState', gameState);
+      } else {
+        // Store the game state for when GameScene becomes active
+        console.log('⚠️ GameScene not active, storing game state for later');
+        this.scene.game.registry.set('pendingGameState', gameState);
       }
     });
 
@@ -391,6 +433,7 @@ export class NetworkSystem implements IGameSystem {
 
     this.socket.on('wall:damaged', (data: any) => {
       if (this.connectionState === ConnectionState.AUTHENTICATED) {
+        // console.log('🔨 BACKEND EVENT: wall:damaged', data);
         this.scene.events.emit('backend:wall:damaged', data);
       }
     });
@@ -518,10 +561,11 @@ export class NetworkSystem implements IGameSystem {
       this.inputsSent++;
       
       // Debug: Log movement input periodically
-      if (inputState.movement && (inputState.movement.x !== 0 || inputState.movement.y !== 0)) {
+      const movement = (inputState as any).movement;
+      if (movement && (movement.x !== 0 || movement.y !== 0)) {
         const now = Date.now();
         if (!this.lastMovementLog || now - this.lastMovementLog > 1000) {
-          console.log('🎮 Sending movement input:', inputState.movement, 'Keys:', inputState.keys);
+          console.log('🎮 Sending movement input:', movement, 'Keys:', (inputState as any).keys);
           this.lastMovementLog = now;
         }
       }

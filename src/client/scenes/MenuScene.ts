@@ -1060,9 +1060,13 @@ export class MenuScene extends Phaser.Scene {
       // Get or create NetworkSystem singleton
       const networkSystem = NetworkSystemSingleton.getInstance(this);
       
-      // Check if already connected
-      if (networkSystem.isSocketConnected() && networkSystem.isAuthenticated()) {
-        console.log('✅ Already connected to server');
+      // Check if already connected or connecting
+      if (networkSystem.isSocketConnected()) {
+        if (networkSystem.isAuthenticated()) {
+          console.log('✅ Already connected and authenticated to server');
+        } else {
+          console.log('✅ Already connected to server, waiting for authentication');
+        }
         return;
       }
       
@@ -1115,7 +1119,8 @@ export class MenuScene extends Phaser.Scene {
     this.game.registry.set('playerLoadout', testLoadout);
     this.game.registry.set('testMode', true);
     
-    // Go directly to game scene
-    this.scene.start('GameScene');
+    // Go to configure scene for test mode
+    console.log('Test mode: Going to ConfigureScene with test loadout');
+    this.scene.start('ConfigureScene');
   }
 } 

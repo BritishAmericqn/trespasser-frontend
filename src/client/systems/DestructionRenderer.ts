@@ -65,7 +65,7 @@ export class DestructionRenderer implements IGameSystem {
     this.renderCanvas = document.createElement('canvas');
     this.renderCanvas.width = 64; // Max wall width
     this.renderCanvas.height = 32; // Max wall height
-    this.ctx = this.renderCanvas.getContext('2d');
+    this.ctx = this.renderCanvas.getContext('2d', { willReadFrequently: true });
   }
 
   private generateWallSprites(): void {
@@ -225,7 +225,8 @@ export class DestructionRenderer implements IGameSystem {
     // Listen for game state updates to add new walls
     this.scene.events.on('network:gameState', (gameState: any) => {
       if (gameState.walls) {
-  
+        const wallCount = Object.keys(gameState.walls).length;
+        // console.log(`🧱 DestructionRenderer processing ${wallCount} walls`);
         this.updateWallsFromGameState(gameState.walls);
       }
     });
@@ -369,7 +370,15 @@ export class DestructionRenderer implements IGameSystem {
 
   }
 
-  private updateWallsFromGameState(wallsData: any): void {
+  public updateWallsFromGameState(wallsData: any): void {
+    if (!wallsData) {
+      console.warn('⚠️ No wall data provided');
+      return;
+    }
+    
+    const wallCount = Object.keys(wallsData).length;
+    // console.log(`📦 Updating ${wallCount} walls from game state`);
+    
     // Remove walls that no longer exist in game state
     const currentWallIds = new Set(Object.keys(wallsData));
     const wallsToRemove: string[] = [];
@@ -378,6 +387,10 @@ export class DestructionRenderer implements IGameSystem {
         wallsToRemove.push(id);
       }
     });
+    
+    if (wallsToRemove.length > 0) {
+      console.warn(`🗑️ Removing ${wallsToRemove.length} walls not in game state:`, wallsToRemove);
+    }
     wallsToRemove.forEach(id => this.walls.delete(id));
     
     // Update walls from game state

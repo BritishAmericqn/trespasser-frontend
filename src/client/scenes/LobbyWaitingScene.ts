@@ -1,6 +1,8 @@
 import { GAME_CONFIG } from '../../../shared/constants/index';
 import { NetworkSystem } from '../systems/NetworkSystem';
 import NetworkSystemSingleton from '../systems/NetworkSystemSingleton';
+import { LobbyStateManager, LobbyState } from '../systems/LobbyStateManager';
+import { DebugOverlay } from '../ui/DebugOverlay';
 
 interface LobbyData {
   lobbyId: string;
@@ -12,6 +14,7 @@ interface LobbyData {
 
 export class LobbyWaitingScene extends Phaser.Scene {
   private networkSystem!: NetworkSystem;
+  private debugOverlay?: DebugOverlay;
   
   // UI Elements
   private lobbyContainer!: Phaser.GameObjects.Container;
@@ -20,12 +23,18 @@ export class LobbyWaitingScene extends Phaser.Scene {
   private countdownText!: Phaser.GameObjects.Text;
   private leaveLobbyButton!: Phaser.GameObjects.Text;
   private inviteCodeText!: Phaser.GameObjects.Text;
+  private lobbyIdText!: Phaser.GameObjects.Text;
+  private copyNotification!: Phaser.GameObjects.Text;
   
   // State
   private lobbyData!: LobbyData;
   private isPrivate: boolean = false;
   private countdown: number | null = null;
   private countdownTimer!: Phaser.Time.TimerEvent;
+  
+  // State management
+  private lobbyStateManager!: LobbyStateManager;
+  private stateUnsubscribe?: () => void;
 
   constructor() {
     super({ key: 'LobbyWaitingScene' });
@@ -44,6 +53,18 @@ export class LobbyWaitingScene extends Phaser.Scene {
     // Get NetworkSystem singleton
     this.networkSystem = NetworkSystemSingleton.getInstance(this);
     
+    // Initialize LobbyStateManager
+    this.lobbyStateManager = LobbyStateManager.getInstance();
+    const socket = this.networkSystem.getSocket();
+    if (socket) {
+      this.lobbyStateManager.initialize(socket);
+    }
+    
+    // Subscribe to lobby state changes
+    this.stateUnsubscribe = this.lobbyStateManager.subscribe((state) => {
+      this.handleLobbyStateChange(state);
+    });
+    
     // Setup network event listeners
     this.setupNetworkListeners();
     
@@ -52,6 +73,10 @@ export class LobbyWaitingScene extends Phaser.Scene {
     
     // Initialize with current lobby data
     this.updatePlayerCount();
+    
+    // Create debug overlay (press F9 to toggle)
+    this.debugOverlay = new DebugOverlay(this);
+    console.log('🔍 Press F9 to toggle debug overlay');
     
     console.log('🏢 Lobby waiting scene created for:', this.lobbyData);
   }
@@ -85,8 +110,11 @@ export class LobbyWaitingScene extends Phaser.Scene {
     socket.on('match_started', (data: any) => {
       console.log('🚀 Match started:', data);
       this.stopCountdown();
+      this.scene.stop('LobbyWaitingScene');
       this.scene.start('GameScene', { matchData: data });
     });
+    
+    // Don't listen for game:state here - NetworkSystem handles it
 
     // Handle disconnection
     socket.on('disconnect', () => {
@@ -120,12 +148,16 @@ export class LobbyWaitingScene extends Phaser.Scene {
     lobbyBorder.fillRect(-150, -60, 300, 120);
     lobbyBorder.strokeRect(-150, -60, 300, 120);
 
-    // Lobby ID display
-    const lobbyIdText = this.add.text(0, -40, `Lobby ID: ${this.lobbyData.lobbyId}`, {
+    // Lobby ID display - make it clickable to copy
+    this.lobbyIdText = this.add.text(0, -40, `Lobby ID: ${this.lobbyData.lobbyId}`, {
       fontSize: '10px',
       color: '#cccccc',
       fontFamily: 'monospace'
     }).setOrigin(0.5);
+    
+    // Make lobby ID interactive for copying
+    this.lobbyIdText.setInteractive({ useHandCursor: true });
+    this.setupCopyInteraction(this.lobbyIdText, this.lobbyData.lobbyId, 'Lobby ID');
 
     // Game mode
     const gameMode = this.lobbyData.gameMode || 'deathmatch';
@@ -161,7 +193,7 @@ export class LobbyWaitingScene extends Phaser.Scene {
 
     // Add to container
     this.lobbyContainer.add([
-      lobbyBorder, lobbyIdText, gameModeText, 
+      lobbyBorder, this.lobbyIdText, gameModeText, 
       this.playerCountText, this.statusText, this.countdownText
     ]);
 
@@ -175,7 +207,22 @@ export class LobbyWaitingScene extends Phaser.Scene {
         padding: { x: 10, y: 4 },
         fontFamily: 'monospace'
       }).setOrigin(0.5);
+      
+      // Make invite code interactive for copying
+      this.inviteCodeText.setInteractive({ useHandCursor: true });
+      this.setupCopyInteraction(this.inviteCodeText, this.lobbyData.inviteCode, 'Invite Code');
     }
+    
+    // Create copy notification (hidden initially)
+    this.copyNotification = this.add.text(GAME_CONFIG.GAME_WIDTH / 2, GAME_CONFIG.GAME_HEIGHT / 2 - 100, '', {
+      fontSize: '11px',
+      color: '#00ff00',
+      backgroundColor: '#002200',
+      padding: { x: 12, y: 6 },
+      fontFamily: 'monospace'
+    }).setOrigin(0.5);
+    this.copyNotification.setVisible(false);
+    this.copyNotification.setDepth(1000); // Ensure it's on top
 
     // Leave lobby button with fixed-width background
     const buttonWidth = 200;
@@ -260,33 +307,207 @@ export class LobbyWaitingScene extends Phaser.Scene {
     });
   }
 
+  private setupCopyInteraction(element: Phaser.GameObjects.Text, textToCopy: string, labelName: string): void {
+    // Store original style
+    const originalColor = element.style.color;
+    const originalBg = element.style.backgroundColor;
+    
+    // Hover effect - highlight the text
+    element.on('pointerover', () => {
+      element.setStyle({ 
+        color: '#ffffff',
+        backgroundColor: '#004400'
+      });
+      // Add underline effect or border
+      this.tweens.add({
+        targets: element,
+        scaleX: 1.02,
+        scaleY: 1.02,
+        duration: 100,
+        ease: 'Power2'
+      });
+    });
+    
+    element.on('pointerout', () => {
+      element.setStyle({ 
+        color: originalColor,
+        backgroundColor: originalBg || ''
+      });
+      this.tweens.add({
+        targets: element,
+        scaleX: 1,
+        scaleY: 1,
+        duration: 100,
+        ease: 'Power2'
+      });
+    });
+    
+    // Click to copy
+    element.on('pointerdown', async () => {
+      try {
+        // Copy to clipboard
+        await navigator.clipboard.writeText(textToCopy);
+        
+        // Show notification
+        this.showCopyNotification(`✓ ${labelName} copied to clipboard!`);
+        
+        // Visual feedback on the element
+        element.setStyle({ color: '#00ff00' });
+        this.tweens.add({
+          targets: element,
+          scaleX: 0.98,
+          scaleY: 0.98,
+          duration: 50,
+          yoyo: true,
+          ease: 'Power2',
+          onComplete: () => {
+            // Restore color after a moment
+            this.time.delayedCall(300, () => {
+              element.setStyle({ color: originalColor });
+            });
+          }
+        });
+        
+        console.log(`📋 Copied ${labelName}: ${textToCopy}`);
+      } catch (err) {
+        console.error('Failed to copy:', err);
+        // Fallback for older browsers
+        this.fallbackCopy(textToCopy, labelName);
+      }
+    });
+  }
+  
+  private showCopyNotification(message: string): void {
+    // Clear any existing notification tweens
+    this.tweens.killTweensOf(this.copyNotification);
+    
+    // Set the message and show
+    this.copyNotification.setText(message);
+    this.copyNotification.setVisible(true);
+    this.copyNotification.setAlpha(0);
+    
+    // Animate in
+    this.tweens.add({
+      targets: this.copyNotification,
+      alpha: 1,
+      y: GAME_CONFIG.GAME_HEIGHT / 2 - 95,
+      duration: 200,
+      ease: 'Power2',
+      onComplete: () => {
+        // Hold for a moment then fade out
+        this.time.delayedCall(2000, () => {
+          this.tweens.add({
+            targets: this.copyNotification,
+            alpha: 0,
+            y: GAME_CONFIG.GAME_HEIGHT / 2 - 105,
+            duration: 300,
+            ease: 'Power2',
+            onComplete: () => {
+              this.copyNotification.setVisible(false);
+              this.copyNotification.y = GAME_CONFIG.GAME_HEIGHT / 2 - 100;
+            }
+          });
+        });
+      }
+    });
+  }
+  
+  private fallbackCopy(text: string, label: string): void {
+    // Create temporary input element for fallback copy
+    const tempInput = document.createElement('input');
+    tempInput.value = text;
+    tempInput.style.position = 'absolute';
+    tempInput.style.left = '-9999px';
+    document.body.appendChild(tempInput);
+    tempInput.select();
+    
+    try {
+      document.execCommand('copy');
+      this.showCopyNotification(`✓ ${label} copied to clipboard!`);
+      console.log(`📋 Copied ${label} (fallback): ${text}`);
+    } catch (err) {
+      console.error('Fallback copy failed:', err);
+      this.showCopyNotification('❌ Copy failed - please copy manually');
+    }
+    
+    document.body.removeChild(tempInput);
+  }
+
+  /**
+   * Handle lobby state changes from LobbyStateManager
+   */
+  private handleLobbyStateChange(state: LobbyState | null): void {
+    // Safety check: Don't update if scene is not active
+    if (!this.scene || !this.scene.isActive()) {
+      console.log('⚠️ LobbyWaitingScene not active, ignoring state change');
+      return;
+    }
+    
+    if (!state) {
+      console.log('📊 No lobby state in waiting scene');
+      return;
+    }
+    
+    // Only log significant state changes
+    if (state.status === 'starting' || state.playerCount !== this.lobbyData.playerCount) {
+      console.log('📊 Lobby state change:', state.playerCount, '/', state.maxPlayers, '-', state.status);
+    }
+    
+    // Update lobby data from authoritative source
+    this.lobbyData.playerCount = state.playerCount;
+    this.lobbyData.maxPlayers = state.maxPlayers;
+    
+    // Update UI only if scene is still active
+    if (this.scene.isActive()) {
+      this.updatePlayerCount();
+    }
+    
+    // Handle status changes
+    if (state.status === 'starting' && state.countdown) {
+      this.countdown = state.countdown;
+      if (this.scene.isActive()) {
+        this.startCountdown();
+      }
+    }
+  }
+
   private updatePlayerCount(): void {
+    // Safety check: Don't update if scene is not active
+    if (!this.scene || !this.scene.isActive()) {
+      return;
+    }
+    
     // Safe property access with defaults
     const playerCount = this.lobbyData.playerCount || 0;
     const maxPlayers = this.lobbyData.maxPlayers || 8;
     
     // Check if UI elements exist before using them
-    if (this.playerCountText) {
+    if (this.playerCountText && this.playerCountText.scene) {
       this.playerCountText.setText(`Players: ${playerCount}/${maxPlayers}`);
     } else {
-      console.warn('playerCountText not initialized yet');
+      console.warn('playerCountText not initialized or destroyed');
     }
     
     // Update status based on player count
-    if (this.statusText) {
+    if (this.statusText && this.statusText.scene) {
       if (playerCount >= 2) {
-        this.statusText.setText('Ready to start! Waiting for match begin...');
+        this.statusText.setText('Ready to start! Auto-starting match...');
         this.statusText.setColor('#00ff00');
       
-        // Add pulsing animation when ready
-        this.tweens.add({
-          targets: this.statusText,
-          alpha: 0.7,
-          duration: 1000,
-          yoyo: true,
-          repeat: -1,
-          ease: 'Sine.easeInOut'
-        });
+        // Add pulsing animation when ready (only if tweens still exist)
+        if (this.tweens) {
+          this.tweens.add({
+            targets: this.statusText,
+            alpha: 0.7,
+            duration: 1000,
+            yoyo: true,
+            repeat: -1,
+            ease: 'Sine.easeInOut'
+          });
+        }
+        
+        // Backend will auto-start the match when we have 2+ players
+        console.log('✅ Ready to start with', playerCount, 'players - waiting for backend');
       } else {
         this.statusText.setText('Waiting for more players to join...');
         this.statusText.setColor('#ffaa00');
@@ -329,7 +550,23 @@ export class LobbyWaitingScene extends Phaser.Scene {
           this.countdown--;
           this.updateCountdownDisplay();
         } else {
+          // Countdown reached 0, transition to game
+          console.log('⏰ Countdown reached 0, transitioning to GameScene');
           this.stopCountdown();
+          
+          // Force transition to GameScene if we haven't already
+          // The backend should have sent match_started, but as a fallback...
+          if (this.scene.isActive('LobbyWaitingScene')) {
+            console.log('⚠️ Forcing transition to GameScene (fallback)');
+            this.scene.stop('LobbyWaitingScene');
+            this.scene.start('GameScene', { 
+              matchData: { 
+                lobbyId: this.lobbyData.lobbyId,
+                gameMode: this.lobbyData.gameMode,
+                fromCountdown: true 
+              }
+            });
+          }
         }
       },
       loop: true
@@ -397,6 +634,18 @@ export class LobbyWaitingScene extends Phaser.Scene {
   shutdown(): void {
     this.stopCountdown();
     
+    // Unsubscribe from state changes
+    if (this.stateUnsubscribe) {
+      this.stateUnsubscribe();
+      this.stateUnsubscribe = undefined;
+    }
+    
+    // Clean up debug overlay
+    if (this.debugOverlay) {
+      this.debugOverlay.destroy();
+      this.debugOverlay = undefined;
+    }
+    
     // Clean up network listeners
     const socket = this.networkSystem.getSocket();
     if (socket) {
@@ -404,6 +653,7 @@ export class LobbyWaitingScene extends Phaser.Scene {
       socket.off('player_left_lobby');
       socket.off('match_starting');
       socket.off('match_started');
+      // Don't remove game:state - that's owned by NetworkSystem
       socket.off('disconnect');
       socket.off('lobby_error');
     }

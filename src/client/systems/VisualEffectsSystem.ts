@@ -45,8 +45,24 @@ export class VisualEffectsSystem implements IGameSystem {
   private assetManager: AssetManager;
   private muzzleFlashes: MuzzleFlashData[] = [];
   private explosions: Phaser.GameObjects.Sprite[] = [];
-  private hitMarkers: Phaser.GameObjects.Graphics[] = [];
-  private particles: Phaser.GameObjects.Graphics[] = [];
+  private hitMarkerCanvas: Phaser.GameObjects.Graphics | null = null;
+  private hitMarkerData: Array<{
+    x: number;
+    y: number;
+    timestamp: number;
+    id: number;
+  }> = [];
+  private hitMarkerIdCounter = 0;
+  private particleCanvas: Phaser.GameObjects.Graphics | null = null;
+  private particleData: Array<{
+    x: number;
+    y: number;
+    color: number;
+    size: number;
+    frameCount: number;
+    id: number;
+  }> = [];
+  private particleIdCounter = 0;
   private bulletTrails: BulletTrail[] = [];
   private projectiles: Map<string, Projectile> = new Map();
   private pendingShots: Map<string, PendingShot> = new Map(); // Track shots waiting for backend response
@@ -57,16 +73,30 @@ export class VisualEffectsSystem implements IGameSystem {
   }
 
   initialize(): void {
+    // Create a single graphics canvas for all particles
+    this.particleCanvas = this.scene.add.graphics();
+    this.particleCanvas.setDepth(55);
+    
+    // Create hitmarker canvas
+    this.hitMarkerCanvas = this.scene.add.graphics();
+    this.hitMarkerCanvas.setDepth(60);
+    
     this.setupBackendEventListeners();
     this.setupLocalEventListeners();
-
   }
 
   update(deltaTime: number): void {
     // Update muzzle flashes (they auto-destroy via tweens, so just clean up destroyed ones)
+    const now = Date.now();
     for (let i = this.muzzleFlashes.length - 1; i >= 0; i--) {
       const flash = this.muzzleFlashes[i];
-      if (!flash.sprite.active) {
+      const age = now - flash.startTime;
+      
+      // Remove if inactive or older than 500ms (backup cleanup)
+      if (!flash.sprite.active || age > 500) {
+        if (flash.sprite.active) {
+          flash.sprite.destroy();
+        }
         this.muzzleFlashes.splice(i, 1);
       } else {
         // Update angle based on current player position and cursor
@@ -128,17 +158,31 @@ export class VisualEffectsSystem implements IGameSystem {
   }
 
   destroy(): void {
+    // CRITICAL: Remove event listeners first to stop receiving events
+    this.removeBackendEventListeners();
+    this.removeLocalEventListeners();
+    
     this.muzzleFlashes.forEach(flash => flash.sprite.destroy()); // Destroy sprite
     this.muzzleFlashes = [];
     
     this.explosions.forEach(explosion => explosion.destroy());
     this.explosions = [];
     
-    this.hitMarkers.forEach(marker => marker.destroy());
-    this.hitMarkers = [];
+    // Clear hitmarker data and destroy canvas
+    this.hitMarkerData = [];
+    if (this.hitMarkerCanvas) {
+      this.hitMarkerCanvas.clear();
+      this.hitMarkerCanvas.destroy();
+      this.hitMarkerCanvas = null;
+    }
     
-    this.particles.forEach(particle => particle.destroy());
-    this.particles = [];
+    // Clear particle data and destroy canvas
+    this.particleData = [];
+    if (this.particleCanvas) {
+      this.particleCanvas.clear();
+      this.particleCanvas.destroy();
+      this.particleCanvas = null;
+    }
     
     this.bulletTrails.forEach(trail => trail.line.destroy());
     this.bulletTrails = [];
@@ -152,9 +196,6 @@ export class VisualEffectsSystem implements IGameSystem {
     this.projectiles.clear();
 
     this.pendingShots.clear();
-    
-    this.removeBackendEventListeners();
-    this.removeLocalEventListeners();
   }
 
   private setupBackendEventListeners(): void {
@@ -356,8 +397,10 @@ export class VisualEffectsSystem implements IGameSystem {
     });
 
     this.scene.events.on('backend:wall:damaged', (data: any) => {
+      // console.log('[VisualEffects] backend:wall:damaged received:', data);
       
       if (data.position) {
+        // console.log('[VisualEffects] Creating wall damage particles at:', data.position);
         this.showWallDamageEffect(data.position, data.material || 'concrete');
         this.showHitMarker(data.position);
         
@@ -539,33 +582,67 @@ export class VisualEffectsSystem implements IGameSystem {
   }
 
   private updateHitMarkers(): void {
+    if (!this.hitMarkerCanvas) return;
+    
+    // Clear the canvas
+    this.hitMarkerCanvas.clear();
+    
     // Update hit markers (simple fade out)
-    for (let i = this.hitMarkers.length - 1; i >= 0; i--) {
-      const marker = this.hitMarkers[i];
-      const currentAlpha = marker.alpha;
+    const now = Date.now();
+    
+    for (let i = this.hitMarkerData.length - 1; i >= 0; i--) {
+      const marker = this.hitMarkerData[i];
+      const age = now - marker.timestamp;
+      const maxAge = 200; // Back to 200ms for proper fade timing
       
-      if (currentAlpha <= 0) {
-        marker.destroy();
-        this.hitMarkers.splice(i, 1);
+      // Remove if too old
+      if (age >= maxAge) {
+        this.hitMarkerData.splice(i, 1);
+        // if (this.hitMarkerData.length === 0) {
+        //   console.log('[HITMARKERS] All hitmarkers removed from data array');
+        // }
       } else {
-        marker.setAlpha(currentAlpha - 0.02); // Fade out over time
+        // Calculate alpha fade
+        const fadeProgress = age / maxAge;
+        const alpha = Math.max(0, 1 - fadeProgress);
+        
+        // Draw the X mark on the canvas
+        const size = 4;
+        this.hitMarkerCanvas.lineStyle(2, 0xFF0000, alpha);
+        this.hitMarkerCanvas.beginPath();
+        this.hitMarkerCanvas.moveTo(marker.x - size, marker.y - size);
+        this.hitMarkerCanvas.lineTo(marker.x + size, marker.y + size);
+        this.hitMarkerCanvas.moveTo(marker.x + size, marker.y - size);
+        this.hitMarkerCanvas.lineTo(marker.x - size, marker.y + size);
+        this.hitMarkerCanvas.strokePath();
       }
     }
   }
 
   private updateParticles(): void {
-    // Update particles (simple fade and movement)
-    for (let i = this.particles.length - 1; i >= 0; i--) {
-      const particle = this.particles[i];
-      const currentAlpha = particle.alpha;
+    if (!this.particleCanvas) return;
+    
+    // Clear the canvas
+    this.particleCanvas.clear();
+    
+    // Update and redraw all particles
+    for (let i = this.particleData.length - 1; i >= 0; i--) {
+      const particle = this.particleData[i];
+      particle.frameCount++;
       
-      if (currentAlpha <= 0) {
-        particle.destroy();
-        this.particles.splice(i, 1);
+      // Remove after 30 frames (about 0.5 seconds at 60fps)
+      if (particle.frameCount >= 30) {
+        this.particleData.splice(i, 1);
       } else {
-        particle.setAlpha(currentAlpha - 0.01); // Fade out over time
-        // Simple gravity effect
+        // Calculate alpha fade
+        const alpha = 1 - (particle.frameCount / 30);
+        
+        // Apply gravity
         particle.y += 0.5;
+        
+        // Draw particle on the single canvas
+        this.particleCanvas.fillStyle(particle.color, alpha);
+        this.particleCanvas.fillRect(particle.x, particle.y, particle.size, particle.size);
       }
     }
   }
@@ -589,21 +666,15 @@ export class VisualEffectsSystem implements IGameSystem {
   }
 
   showHitMarker(position: { x: number; y: number }): void {
-    const marker = this.scene.add.graphics();
-    marker.setDepth(60);
-    marker.lineStyle(2, 0xFF0000, 1);
+    // Add hitmarker data
+    this.hitMarkerData.push({
+      x: position.x,
+      y: position.y,
+      timestamp: Date.now(),
+      id: ++this.hitMarkerIdCounter
+    });
     
-    // Draw X mark
-    const size = 4;
-    marker.beginPath();
-    marker.moveTo(position.x - size, position.y - size);
-    marker.lineTo(position.x + size, position.y + size);
-    marker.moveTo(position.x + size, position.y - size);
-    marker.lineTo(position.x - size, position.y + size);
-    marker.strokePath();
-    
-    this.hitMarkers.push(marker);
-
+    // console.log(`[HITMARKER] Created hitmarker ID ${this.hitMarkerIdCounter} at (${position.x}, ${position.y}), total: ${this.hitMarkerData.length}`);
   }
 
   showImpactEffect(position: { x: number; y: number }, direction: number): void {
@@ -635,25 +706,33 @@ export class VisualEffectsSystem implements IGameSystem {
     const colors = this.getDebrisColors(material);
     
     for (let i = 0; i < debrisCount; i++) {
-      const debris = this.scene.add.graphics();
-      debris.setDepth(55);
-      debris.fillStyle(colors[Math.floor(Math.random() * colors.length)]);
-      debris.fillRect(0, 0, 1, 1);
-      
       // Position with random offset
-      debris.x = position.x + (Math.random() - 0.5) * 15;
-      debris.y = position.y + (Math.random() - 0.5) * 15;
+      const particleX = position.x + (Math.random() - 0.5) * 15;
+      const particleY = position.y + (Math.random() - 0.5) * 15;
       
-      this.particles.push(debris);
+      // Add particle data
+      this.particleData.push({
+        x: particleX,
+        y: particleY,
+        color: colors[Math.floor(Math.random() * colors.length)],
+        size: 2,
+        frameCount: 0,
+        id: ++this.particleIdCounter
+      });
     }
-    
-    
   }
 
   showExplosionEffect(position: { x: number; y: number }, radius: number): void {
     // Use real explosion animation
     const explosion = this.assetManager.showExplosion(position.x, position.y);
     this.explosions.push(explosion);
+    
+    // Backup cleanup in case animation doesn't complete
+    this.scene.time.delayedCall(1000, () => {
+      if (explosion.active) {
+        explosion.destroy();
+      }
+    });
     
     // Emit explosion event for screen shake system
     this.scene.events.emit('explosion:effect', {
@@ -666,22 +745,27 @@ export class VisualEffectsSystem implements IGameSystem {
     const particleCount = Math.min(12, Math.floor(radius / 3));
     
     for (let i = 0; i < particleCount; i++) {
-      const particle = this.scene.add.graphics();
-      particle.setDepth(55);
-      
-      // Alternate between orange and red debris
-      const color = i % 2 === 0 ? 0xFF8000 : 0xFF0000;
-      particle.fillStyle(color);
-      particle.fillRect(0, 0, 2, 2);
-      
       // Position in circle around explosion center
       const angle = (Math.PI * 2 * i) / particleCount;
       const distance = Math.random() * radius * 0.7;
-      particle.x = position.x + Math.cos(angle) * distance;
-      particle.y = position.y + Math.sin(angle) * distance;
+      const particleX = position.x + Math.cos(angle) * distance;
+      const particleY = position.y + Math.sin(angle) * distance;
       
-      this.particles.push(particle);
+      // Alternate between orange and red debris
+      const color = i % 2 === 0 ? 0xFF8000 : 0xFF0000;
+      
+      // Add particle data
+      this.particleData.push({
+        x: particleX,
+        y: particleY,
+        color: color,
+        size: 3,
+        frameCount: 0,
+        id: ++this.particleIdCounter
+      });
     }
+    
+
   }
 
   private getDebrisColors(material: string): number[] {
@@ -1096,8 +1180,8 @@ export class VisualEffectsSystem implements IGameSystem {
     return {
       muzzleFlashes: this.muzzleFlashes.length,
       explosions: this.explosions.length,
-      hitMarkers: this.hitMarkers.length,
-      particles: this.particles.length,
+      hitMarkers: this.hitMarkerData.length,
+      particles: this.particleData.length,
       bulletTrails: this.bulletTrails.length
     };
   }
@@ -1112,12 +1196,16 @@ export class VisualEffectsSystem implements IGameSystem {
     this.explosions = [];
     
     // Clear hit markers
-    this.hitMarkers.forEach(marker => marker.destroy());
-    this.hitMarkers = [];
+    this.hitMarkerData = [];
+    if (this.hitMarkerCanvas) {
+      this.hitMarkerCanvas.clear();
+    }
     
     // Clear particles
-    this.particles.forEach(particle => particle.destroy());
-    this.particles = [];
+    this.particleData = [];
+    if (this.particleCanvas) {
+      this.particleCanvas.clear();
+    }
     
     // Clear bullet trails
     this.bulletTrails.forEach(trail => trail.line.destroy());

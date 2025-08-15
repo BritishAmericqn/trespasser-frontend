@@ -56,6 +56,21 @@ export class ConfigureScene extends Phaser.Scene {
   }
 
   create(): void {
+    // Check if we have an active match (shouldn't be in ConfigureScene if there's a match)
+    if (typeof NetworkSystemSingleton !== 'undefined' && NetworkSystemSingleton.hasInstance()) {
+      const networkSystem = NetworkSystemSingleton.getInstance(this);
+      const socket = networkSystem.getSocket();
+      
+      if (socket) {
+        // Listen for match_started in case we're here by mistake
+        socket.once('match_started', (data: any) => {
+          console.log('🚀 Match started while in ConfigureScene, transitioning to GameScene');
+          this.scene.start('GameScene', { matchData: data });
+        });
+        
+        // Don't listen for game:state here - NetworkSystem handles it
+      }
+    }
     // Create atmospheric background from main menu
     this.createAtmosphericBackground();
     
@@ -697,6 +712,37 @@ export class ConfigureScene extends Phaser.Scene {
     this.game.registry.set('playerLoadout', this.loadout);
     console.log('ConfigureScene: Saved loadout to GAME registry:', this.loadout);
     
+    // Check if we came from instant play flow
+    const fromInstantPlay = this.game.registry.get('fromInstantPlay');
+    if (fromInstantPlay) {
+      console.log('ConfigureScene: Came from instant play, starting matchmaking');
+      this.game.registry.remove('fromInstantPlay');
+      
+      // Go directly to matchmaking with instant play mode
+      const networkSystem = NetworkSystemSingleton.getInstance(this);
+      const socket = networkSystem.getSocket();
+      if (socket) {
+        // Emit find_match directly here
+        socket.emit('find_match', { 
+          gameMode: 'deathmatch',
+          isPrivate: false 
+        });
+        
+        // Go to matchmaking scene
+        this.scene.start('MatchmakingScene', { gameMode: 'deathmatch', instantPlay: true });
+        return;
+      }
+    }
+    
+    // Check if we have a pending match from instant play
+    const pendingMatch = this.game.registry.get('pendingMatch');
+    if (pendingMatch) {
+      console.log('ConfigureScene: Found pending match, going directly to game');
+      this.game.registry.remove('pendingMatch');
+      this.scene.start('GameScene', { matchData: pendingMatch });
+      return;
+    }
+    
     // Check if we have NetworkSystemSingleton and are already connected
     if (typeof NetworkSystemSingleton !== 'undefined' && NetworkSystemSingleton.hasInstance()) {
       const networkSystem = NetworkSystemSingleton.getInstance(this);
@@ -704,9 +750,9 @@ export class ConfigureScene extends Phaser.Scene {
       console.log('ConfigureScene: Connection state:', connectionState);
       
       if (connectionState === ConnectionState.AUTHENTICATED) {
-        // Already connected, go directly to game
-        console.log('ConfigureScene: Already connected, starting GameScene');
-        this.scene.start('GameScene');
+        // Already connected, go to lobby menu to find/create a match
+        console.log('ConfigureScene: Already connected, going to LobbyMenuScene');
+        this.scene.start('LobbyMenuScene');
         return;
       }
     }
@@ -716,9 +762,15 @@ export class ConfigureScene extends Phaser.Scene {
     this.scene.start('MenuScene');
   }
 
+  private lastConnectionCheck = 0;
+  
   update(): void {
-    // Update button states
-    this.updateStartGameButton();
+    // Only check connection state occasionally to prevent spam
+    const now = Date.now();
+    if (now - this.lastConnectionCheck > 1000) { // Check once per second
+      this.lastConnectionCheck = now;
+      this.updateStartGameButton();
+    }
   }
 
   private createAtmosphericBackground(): void {
@@ -818,5 +870,21 @@ export class ConfigureScene extends Phaser.Scene {
         });
       }
     });
+  }
+
+  shutdown(): void {
+    // Clean up socket listeners
+    const networkSystem = NetworkSystemSingleton.getInstance(this);
+    const socket = networkSystem?.getSocket();
+    if (socket) {
+      socket.off('match_started');
+      // Don't remove game:state - that's owned by NetworkSystem
+    }
+    
+    // Clean up any timers
+    this.time.removeAllEvents();
+    
+    // Clean up any tweens
+    this.tweens.killAll();
   }
 } 

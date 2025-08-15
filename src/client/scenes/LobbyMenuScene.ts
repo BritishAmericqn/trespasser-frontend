@@ -102,7 +102,7 @@ export class LobbyMenuScene extends Phaser.Scene {
     title.setDepth(3);
 
     // Subtitle positioned better within the UI space
-    const subtitle = this.add.text(GAME_CONFIG.GAME_WIDTH / 2, 75, 'LOBBY SYSTEM', {
+    const subtitle = this.add.text(GAME_CONFIG.GAME_WIDTH / 2, 75, 'MULTIPLAYER', {
       fontSize: '12px',
       color: '#cccccc',
       fontFamily: 'monospace'
@@ -124,40 +124,40 @@ export class LobbyMenuScene extends Phaser.Scene {
     const primaryHeight = 24;
     const secondaryHeight = 20;
 
-    // Find Match button with fixed-width background - more breathing room
+    // Instant Play button (primary action) - more breathing room
     const findMatchBg = this.add.graphics();
     findMatchBg.fillStyle(0x006600);
     findMatchBg.fillRect(-buttonWidth/2, -35 - primaryHeight/2, buttonWidth, primaryHeight);
-    this.findMatchButton = this.add.text(0, -35, '▶ DEATHMATCH', {
+    this.findMatchButton = this.add.text(0, -35, '▶ INSTANT PLAY', {
       fontSize: '14px',
       color: '#ffffff',
       fontFamily: 'monospace'
     }).setOrigin(0.5);
 
-    // Private Lobby button with fixed-width background - more spacing
+    // Server Browser button (was Private) - more spacing
     const privateBg = this.add.graphics();
     privateBg.fillStyle(0x444444);
     privateBg.fillRect(-buttonWidth/2, -5 - secondaryHeight/2, buttonWidth, secondaryHeight);
-    this.privateButton = this.add.text(0, -5, '🔒 PRIVATE', {
+    this.privateButton = this.add.text(0, -5, '🌐 SERVER BROWSER', {
       fontSize: '12px',
       color: '#ffffff',
       fontFamily: 'monospace'
     }).setOrigin(0.5);
 
-    // Join Lobby button with fixed-width background - better spacing
+    // Create Private Server button - better spacing
     const joinBg = this.add.graphics();
     joinBg.fillStyle(0x444444);
     joinBg.fillRect(-buttonWidth/2, 25 - secondaryHeight/2, buttonWidth, secondaryHeight);
-    this.joinLobbyButton = this.add.text(0, 25, '🎮 JOIN', {
+    this.joinLobbyButton = this.add.text(0, 25, '🔒 CREATE PRIVATE', {
       fontSize: '12px',
       color: '#ffffff',
       fontFamily: 'monospace'
     }).setOrigin(0.5);
 
     // Setup button interactions
-    this.setupButton(this.findMatchButton, '#006600', '#008800', () => this.findMatch());
-    this.setupButton(this.privateButton, '#444444', '#666666', () => this.createPrivateLobby());
-    this.setupButton(this.joinLobbyButton, '#444444', '#666666', () => this.joinLobbyById());
+    this.setupButton(this.findMatchButton, '#006600', '#008800', () => this.instantPlay());
+    this.setupButton(this.privateButton, '#444444', '#666666', () => this.openServerBrowser());
+    this.setupButton(this.joinLobbyButton, '#444444', '#666666', () => this.createPrivateLobby());
 
     // Add to container (backgrounds first, then text)
     this.mainContainer.add([menuBorder, findMatchBg, this.findMatchButton, privateBg, this.privateButton, joinBg, this.joinLobbyButton]);
@@ -196,7 +196,7 @@ export class LobbyMenuScene extends Phaser.Scene {
 
     // Instructions at bottom
     const instructions = this.add.text(GAME_CONFIG.GAME_WIDTH / 2, GAME_CONFIG.GAME_HEIGHT - 10, 
-      'New Multi-Lobby System: Find matches, create private lobbies, or join by ID', {
+      'Instant Play for quick matches • Server Browser to find games • Create Private for friends', {
       fontSize: '8px',
       color: '#888888',
       align: 'center',
@@ -373,10 +373,21 @@ export class LobbyMenuScene extends Phaser.Scene {
     this.joinLobbyButton.setData('enabled', false);
   }
 
-  private findMatch(): void {
-    console.log('🎯 Finding deathmatch...');
+  private instantPlay(): void {
+    console.log('🎮 Instant Play - Finding match...');
     this.clearError();
     this.disableButtons();
+    
+    // Check if we have a loadout configured
+    const playerLoadout = this.game.registry.get('playerLoadout');
+    if (!playerLoadout) {
+      // No loadout yet, go to configure scene first
+      console.log('📋 No loadout configured, going to ConfigureScene');
+      // Set flag so ConfigureScene knows to continue with instant play
+      this.game.registry.set('fromInstantPlay', true);
+      this.scene.start('ConfigureScene');
+      return;
+    }
     
     // Emit find_match event to backend
     const socket = this.networkSystem.getSocket();
@@ -391,11 +402,20 @@ export class LobbyMenuScene extends Phaser.Scene {
       this.statusText.setColor('#ffaa00');
       
       // Switch to matchmaking scene for loading animation
-      this.scene.start('MatchmakingScene', { gameMode: 'deathmatch' });
+      this.scene.start('MatchmakingScene', { gameMode: 'deathmatch', instantPlay: true });
     } else {
       this.showError('Not connected to server');
       this.enableButtons();
     }
+  }
+  
+  private openServerBrowser(): void {
+    console.log('🌐 Opening server browser...');
+    this.clearError();
+    
+    // For now, show a coming soon message
+    // TODO: Implement proper server browser scene
+    this.showError('Server Browser coming soon! Use Instant Play or Create Private for now.');
   }
 
   private createPrivateLobby(): void {
@@ -469,6 +489,16 @@ export class LobbyMenuScene extends Phaser.Scene {
     // Clean up event listeners
     this.events.off('network:authenticated');
     this.events.off('network:connectionError');
+    
+    // CRITICAL: Clean up socket listeners to prevent zombie listeners
+    const socket = this.networkSystem?.getSocket();
+    if (socket) {
+      socket.off('lobby_joined');
+      socket.off('matchmaking_failed');
+      socket.off('private_lobby_created');
+      socket.off('lobby_creation_failed');
+      socket.off('lobby_join_failed');
+    }
     
     // NetworkSystem is a singleton, preserve it
   }

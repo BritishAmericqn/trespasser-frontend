@@ -1,12 +1,15 @@
 import { GAME_CONFIG } from '../../../shared/constants/index';
 import { NetworkSystem } from '../systems/NetworkSystem';
 import NetworkSystemSingleton from '../systems/NetworkSystemSingleton';
+import { LobbyStateManager, LobbyState } from '../systems/LobbyStateManager';
+import { DebugOverlay } from '../ui/DebugOverlay';
 
 export class MatchmakingScene extends Phaser.Scene {
   private networkSystem!: NetworkSystem;
   
   // UI Elements
   private statusText!: Phaser.GameObjects.Text;
+  private debugOverlay?: DebugOverlay;
   private dotsText!: Phaser.GameObjects.Text;
   private cancelButton!: Phaser.GameObjects.Text;
   private tipsText!: Phaser.GameObjects.Text;
@@ -17,6 +20,14 @@ export class MatchmakingScene extends Phaser.Scene {
   
   // Scene data
   private gameMode: string = 'deathmatch';
+  private instantPlay: boolean = false;
+  private playerCount: number = 1;
+  private maxPlayers: number = 8;
+  private lobbyId: string | null = null;
+  
+  // State management
+  private lobbyStateManager!: LobbyStateManager;
+  private stateUnsubscribe?: () => void;
 
   constructor() {
     super({ key: 'MatchmakingScene' });
@@ -24,6 +35,10 @@ export class MatchmakingScene extends Phaser.Scene {
 
   init(data: any): void {
     this.gameMode = data.gameMode || 'deathmatch';
+    this.instantPlay = data.instantPlay || false;
+    this.playerCount = 1;
+    this.maxPlayers = 8;
+    this.lobbyId = null;
   }
 
   create(): void {
@@ -34,6 +49,18 @@ export class MatchmakingScene extends Phaser.Scene {
     // Get NetworkSystem singleton
     this.networkSystem = NetworkSystemSingleton.getInstance(this);
     
+    // Initialize LobbyStateManager
+    this.lobbyStateManager = LobbyStateManager.getInstance();
+    const socket = this.networkSystem.getSocket();
+    if (socket) {
+      this.lobbyStateManager.initialize(socket);
+    }
+    
+    // Subscribe to lobby state changes
+    this.stateUnsubscribe = this.lobbyStateManager.subscribe((state) => {
+      this.handleLobbyStateChange(state);
+    });
+    
     // Setup network event listeners
     this.setupNetworkListeners();
     
@@ -42,17 +69,106 @@ export class MatchmakingScene extends Phaser.Scene {
     
     // Start loading animation
     this.startLoadingAnimation();
+    
+    // Create debug overlay (press F9 to toggle)
+    this.debugOverlay = new DebugOverlay(this);
+    console.log('🔍 Press F9 to toggle debug overlay');
+    
+    // Don't add game:state listeners - NetworkSystem handles that
   }
 
   private setupNetworkListeners(): void {
+    const socket = this.networkSystem.getSocket();
+    if (!socket) return;
+    
     // Lobby events
-    this.networkSystem.getSocket()?.on('lobby_joined', (data: any) => {
+    socket.on('lobby_joined', (data: any) => {
       console.log('🏢 Lobby joined from matchmaking:', data);
-      this.stopLoadingAnimation();
-      this.scene.start('LobbyWaitingScene', { lobbyData: data });
+      this.lobbyId = data.lobbyId;
+      this.playerCount = data.playerCount || 1;
+      this.maxPlayers = data.maxPlayers || 8;
+      
+      if (this.instantPlay) {
+        // Update player count display for instant play
+        this.updatePlayerCount();
+        
+        // Don't stop loading animation yet, wait for more players
+        this.statusText.setText('Waiting for players...');
+        
+        // If we have 2+ players, backend will handle auto-start
+        if (this.playerCount >= 2) {
+          console.log('✅ Enough players for match - waiting for backend to start');
+          this.statusText.setText('Ready! Match will start soon...');
+          this.statusText.setColor('#00ff00');
+        }
+      } else {
+        // Normal flow - go to lobby waiting scene
+        this.stopLoadingAnimation();
+        this.scene.start('LobbyWaitingScene', { lobbyData: data });
+      }
     });
     
-    this.networkSystem.getSocket()?.on('matchmaking_failed', (data: any) => {
+    // Player joined/left updates (for instant play mode)
+    socket.on('player_joined_lobby', (data: any) => {
+      if (this.instantPlay && data.lobbyId === this.lobbyId) {
+        this.playerCount = data.playerCount;
+        this.updatePlayerCount();
+        
+        // If we now have 2+ players, backend will handle auto-start
+        if (this.playerCount >= 2) {
+          console.log('✅ Player joined, now have enough players - backend will start match');
+          this.statusText.setText('Ready! Match will start soon...');
+          this.statusText.setColor('#00ff00');
+        }
+      }
+    });
+    
+    socket.on('player_left_lobby', (data: any) => {
+      if (this.instantPlay && data.lobbyId === this.lobbyId) {
+        this.playerCount = data.playerCount;
+        this.updatePlayerCount();
+      }
+    });
+    
+    // Direct match start (if backend starts match immediately)
+    socket.on('match_started', (data: any) => {
+      console.log('🚀 Match started directly from matchmaking:', data);
+      this.stopLoadingAnimation();
+      
+      // Clean up before transition
+      this.shutdown();
+      
+      if (this.instantPlay) {
+        // For instant play, check if we have a loadout
+        const playerLoadout = this.game.registry.get('playerLoadout');
+        if (!playerLoadout) {
+          // Need to configure loadout first
+          this.game.registry.set('pendingMatch', data);
+          this.scene.stop('MatchmakingScene');
+          this.scene.start('ConfigureScene');
+        } else {
+          // Have loadout, go directly to game
+          this.scene.stop('MatchmakingScene');
+          this.scene.start('GameScene', { matchData: data });
+        }
+      } else {
+        // Normal flow
+        this.scene.stop('MatchmakingScene');
+        this.scene.start('GameScene', { matchData: data });
+      }
+    });
+    
+    // Don't listen for game:state here - NetworkSystem handles it
+    // If we need to know about game state, we should listen to Phaser events instead
+    
+    // Match starting countdown
+    socket.on('match_starting', (data: any) => {
+      console.log('⏱️ Match starting soon:', data);
+      // Update status to show match is about to start
+      this.statusText.setText(`Match starting in ${data.countdown}s...`);
+    });
+    
+    socket.on('matchmaking_failed', (data: any) => {
       console.error('❌ Matchmaking failed:', data.reason);
       this.stopLoadingAnimation();
       this.scene.start('LobbyMenuScene');
@@ -60,15 +176,88 @@ export class MatchmakingScene extends Phaser.Scene {
     });
     
     // Handle disconnection
-    this.networkSystem.getSocket()?.on('disconnect', () => {
+    socket.on('disconnect', () => {
       this.stopLoadingAnimation();
       this.scene.start('LobbyMenuScene');
     });
   }
+  
+  private updatePlayerCount(): void {
+    // Safety check: Don't update if scene is not active
+    if (!this.scene || !this.scene.isActive()) {
+      return;
+    }
+    
+    // Find and update the player count text
+    const playerCountText = this.children?.list?.find((child: any) => 
+      child && child.getData && child.getData('playerCountText')
+    ) as Phaser.GameObjects.Text;
+    
+    if (playerCountText && playerCountText.scene) {
+      playerCountText.setText(`${this.playerCount}/${this.maxPlayers} Players`);
+      
+      // Color based on player count
+      if (this.playerCount >= 2) {
+        playerCountText.setColor('#00ff00');
+      } else {
+        playerCountText.setColor('#ffaa00');
+      }
+    }
+  }
+  
+  /**
+   * Handle lobby state changes from LobbyStateManager
+   */
+  private handleLobbyStateChange(state: LobbyState | null): void {
+    // Safety check: Don't update if scene is not active
+    if (!this.scene || !this.scene.isActive()) {
+      console.log('⚠️ MatchmakingScene not active, ignoring state change');
+      return;
+    }
+    
+    if (!state) {
+      console.log('📊 No lobby state');
+      return;
+    }
+    
+    // Only log significant state changes
+    if (state.status === 'starting' || state.playerCount !== this.playerCount) {
+      console.log('📊 Lobby state change:', state.playerCount, '/', state.maxPlayers, '-', state.status);
+    }
+    
+    // Update local state from authoritative source
+    this.playerCount = state.playerCount;
+    this.maxPlayers = state.maxPlayers;
+    this.lobbyId = state.lobbyId;
+    
+    // Update UI only if scene is still active
+    if (this.scene.isActive()) {
+      this.updatePlayerCount();
+    }
+    
+    // Handle status changes
+    if (state.status === 'starting' && state.countdown) {
+      if (this.statusText && this.scene.isActive()) {
+        this.statusText.setText(`Match starting in ${state.countdown}s...`);
+        this.statusText.setColor('#ff4444');
+      }
+    } else if (state.playerCount >= 2) {
+      if (this.statusText && this.statusText.scene && this.scene.isActive()) {
+        this.statusText.setText('Ready! Match will start soon...');
+        this.statusText.setColor('#00ff00');
+      }
+    } else {
+      if (this.statusText && this.statusText.scene && this.scene.isActive()) {
+        this.statusText.setText('Waiting for players...');
+        this.statusText.setColor('#ffaa00');
+      }
+    }
+  }
 
   private createUI(): void {
-    // Title
-    const title = this.add.text(GAME_CONFIG.GAME_WIDTH / 2, 40, 'FINDING MATCH', {
+    // Title changes based on mode
+    const titleText = this.instantPlay ? 'JOINING MATCH' : 'FINDING MATCH';
+    const title = this.add.text(GAME_CONFIG.GAME_WIDTH / 2, 40, titleText, {
       fontSize: '24px',
       color: '#00ff00',
       fontStyle: 'bold',
@@ -98,13 +287,33 @@ export class MatchmakingScene extends Phaser.Scene {
       color: '#ffffff',
       fontFamily: 'monospace'
     }).setOrigin(0.5);
+    
+    // Player count display (for instant play)
+    const playerCountText = this.add.text(GAME_CONFIG.GAME_WIDTH / 2, GAME_CONFIG.GAME_HEIGHT / 2, 
+      this.instantPlay ? '1/8 Players' : '', {
+      fontSize: '18px',
+      color: '#ffaa00',
+      fontStyle: 'bold',
+      fontFamily: 'monospace'
+    }).setOrigin(0.5);
+    playerCountText.setData('playerCountText', true);
+    
+    // Show player count only in instant play mode
+    if (!this.instantPlay) {
+      playerCountText.setVisible(false);
+    }
 
-    // Animated dots
-    this.dotsText = this.add.text(GAME_CONFIG.GAME_WIDTH / 2, GAME_CONFIG.GAME_HEIGHT / 2, '', {
+    // Animated dots (shown when not in instant play)
+    this.dotsText = this.add.text(GAME_CONFIG.GAME_WIDTH / 2, GAME_CONFIG.GAME_HEIGHT / 2 + 20, '', {
       fontSize: '16px',
       color: '#ffaa00',
       fontFamily: 'monospace'
     }).setOrigin(0.5);
+    
+    // Hide dots in instant play mode
+    if (this.instantPlay) {
+      this.dotsText.setVisible(false);
+    }
 
     // Pro tips section (match your existing style)
     const tipsTitle = this.add.text(GAME_CONFIG.GAME_WIDTH / 2, GAME_CONFIG.GAME_HEIGHT / 2 + 40, 'PRO TIPS:', {
@@ -181,43 +390,67 @@ export class MatchmakingScene extends Phaser.Scene {
   }
 
   private startLoadingAnimation(): void {
-    // Animated dots (like your terminal aesthetic)
-    this.dotTimer = this.time.addEvent({
-      delay: 500,
-      callback: () => {
-        this.dotCount = (this.dotCount + 1) % 4;
-        this.dotsText.setText('.'.repeat(this.dotCount));
-      },
-      loop: true
-    });
+    if (this.instantPlay) {
+      // For instant play, just show waiting for players
+      this.statusText.setText('Waiting for players...');
+      this.updatePlayerCount();
+      
+      // Simple pulsing for player count
+      const playerCountText = this.children.list.find((child: any) => 
+        child.getData && child.getData('playerCountText')
+      );
+      
+      if (playerCountText) {
+        this.tweens.add({
+          targets: playerCountText,
+          scaleX: 1.05,
+          scaleY: 1.05,
+          duration: 1000,
+          yoyo: true,
+          repeat: -1,
+          ease: 'Sine.easeInOut'
+        });
+      }
+    } else {
+      // Normal matchmaking animation
+      // Animated dots
+      this.dotTimer = this.time.addEvent({
+        delay: 500,
+        callback: () => {
+          this.dotCount = (this.dotCount + 1) % 4;
+          this.dotsText.setText('.'.repeat(this.dotCount));
+        },
+        loop: true
+      });
 
-    // Cycle through different status messages
-    const statusMessages = [
-      'Searching for available lobby',
-      'Looking for players',
-      'Checking server capacity',
-      'Preparing match environment'
-    ];
+      // Cycle through different status messages
+      const statusMessages = [
+        'Searching for available lobby',
+        'Looking for players',
+        'Checking server capacity',
+        'Preparing match environment'
+      ];
 
-    let messageIndex = 0;
-    this.time.addEvent({
-      delay: 2000,
-      callback: () => {
-        messageIndex = (messageIndex + 1) % statusMessages.length;
-        this.statusText.setText(statusMessages[messageIndex]);
-      },
-      loop: true
-    });
+      let messageIndex = 0;
+      this.time.addEvent({
+        delay: 2000,
+        callback: () => {
+          messageIndex = (messageIndex + 1) % statusMessages.length;
+          this.statusText.setText(statusMessages[messageIndex]);
+        },
+        loop: true
+      });
 
-    // Add subtle pulsing animation to title
-    this.tweens.add({
-      targets: this.statusText,
-      alpha: 0.7,
-      duration: 1000,
-      yoyo: true,
-      repeat: -1,
-      ease: 'Sine.easeInOut'
-    });
+      // Add subtle pulsing animation to title
+      this.tweens.add({
+        targets: this.statusText,
+        alpha: 0.7,
+        duration: 1000,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut'
+      });
+    }
   }
 
   private stopLoadingAnimation(): void {
@@ -272,10 +505,27 @@ export class MatchmakingScene extends Phaser.Scene {
   shutdown(): void {
     this.stopLoadingAnimation();
     
+    // Unsubscribe from state changes
+    if (this.stateUnsubscribe) {
+      this.stateUnsubscribe();
+      this.stateUnsubscribe = undefined;
+    }
+    
+    // Clean up debug overlay
+    if (this.debugOverlay) {
+      this.debugOverlay.destroy();
+      this.debugOverlay = undefined;
+    }
+    
     // Clean up network listeners
     const socket = this.networkSystem.getSocket();
     if (socket) {
       socket.off('lobby_joined');
+      socket.off('player_joined_lobby');
+      socket.off('player_left_lobby');
+      socket.off('match_started');
+      socket.off('match_starting');
+      // Don't remove game:state - that's owned by NetworkSystem
       socket.off('matchmaking_failed');
       socket.off('disconnect');
     }

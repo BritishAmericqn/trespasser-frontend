@@ -140,9 +140,12 @@ export class PlayerManager {
       : new Map(Object.entries(serverPlayers));
     
     // Debug log player count
-    const playerCount = Array.from(playersMap.keys()).filter(id => id !== this.localPlayerId).length;
-    if (playerCount > 0) {
-      console.log(`👥 PlayerManager: Updating ${playerCount} other players`);
+    // Only log occasionally to reduce spam
+    if (Math.random() < 0.005) { // 0.5% chance
+      const playerCount = Array.from(playersMap.keys()).filter(id => id !== this.localPlayerId).length;
+      if (playerCount > 0) {
+        console.log(`👥 PlayerManager sample: ${playerCount} other players`);
+      }
     }
     
     // Track which players are still visible
@@ -287,15 +290,15 @@ export class PlayerManager {
     }
 
     // Debug log to see what rotation data we're getting
-    if (Math.random() < 0.05) { // Log 5% of updates to avoid spam
-      console.log(`🎯 Player ${id} state:`, {
-        rotation: (state as any).rotation,
-        direction: (state as any).direction,
-        mouseAngle: (state as any).mouseAngle,
-        angle: state.angle,
-        velocity: state.velocity
-      });
-    }
+    // if (Math.random() < 0.05) { // Log 5% of updates to avoid spam
+    //   console.log(`🎯 Player ${id} state:`, {
+    //     rotation: (state as any).rotation,
+    //     direction: (state as any).direction,
+    //     mouseAngle: (state as any).mouseAngle,
+    //     angle: state.angle,
+    //     velocity: state.velocity
+    //   });
+    // }
     
     // Use exact rotation from backend if available
     let playerAngle = 0;

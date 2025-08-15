@@ -318,3 +318,4 @@ Frontend will NOT cause performance issues - it's already handling test mode at 
 ## Contact
 
 If you need to test specific event formats or have questions about the frontend implementation, the frontend is ready to adapt to any reasonable backend requirements. The core issue is simply: **we need `game:state` events to be sent after `player:join`**.
+

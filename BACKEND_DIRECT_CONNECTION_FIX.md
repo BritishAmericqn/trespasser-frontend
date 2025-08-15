@@ -85,3 +85,4 @@ Users must use the lobby system (INSTANT PLAY → Find Match → Wait for match)
 
 ## Priority: CRITICAL
 This blocks all direct testing and development workflows!
+

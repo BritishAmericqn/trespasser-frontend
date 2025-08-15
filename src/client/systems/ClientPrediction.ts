@@ -235,6 +235,10 @@ export class ClientPrediction {
     } else if (errorMagnitude > 20) {
       // Large error - snap to correct position
       console.warn(`🚨 Large position error (${errorMagnitude.toFixed(1)}px), snapping to predicted position`);
+      console.log('  - Current render pos:', this.renderPosition);
+      console.log('  - Predicted pos:', this.predictedPosition);
+      console.log('  - Server pos:', this.serverPosition);
+      console.log('  - Input buffer size:', this.inputBuffer.length);
       this.renderPosition = { ...this.predictedPosition };
       
       if (this.onPositionUpdate) {

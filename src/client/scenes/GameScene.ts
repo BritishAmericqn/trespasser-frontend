@@ -59,6 +59,13 @@ export class GameScene extends Phaser.Scene {
   private wallSliceSprites: Map<string, Phaser.GameObjects.Sprite> = new Map(); // Back to regular Sprite
   private floorSprites: Phaser.GameObjects.Sprite[] = [];
   private debugOverlay!: Phaser.GameObjects.Text;
+  private inputText?: Phaser.GameObjects.Text;
+  private mouseText?: Phaser.GameObjects.Text;
+  
+  // Test mode properties
+  private backgroundSprite?: Phaser.GameObjects.TileSprite;
+  private playerLoadout?: any;
+  
   // Server position indicator visibility flag
 
 
@@ -69,42 +76,84 @@ export class GameScene extends Phaser.Scene {
 
   init(data: any): void {
     // NetworkSystem singleton will be retrieved in create()
-    console.log('GameScene: Initializing');
+    console.log('GameScene: Initializing with data:', data);
     
     // Handle match data from new lobby system
     if (data?.matchData) {
       this.matchData = data.matchData;
       this.killTarget = data.matchData.killTarget || 50;
       console.log('🎯 Match initialized with kill target:', this.killTarget);
+      
+      // Check if this is an emergency transition
+      if (data.matchData.emergency || data.matchData.fromNetworkSystem) {
+        console.log('🚨 Emergency transition detected - game already started');
+      }
     }
     
     // Get configured loadout from registry
-    const playerLoadout = this.game.registry.get('playerLoadout');
-    if (!playerLoadout) {
-      console.error('GameScene: No player loadout configured! Returning to ConfigureScene.');
-      this.scene.start('ConfigureScene');
-      return;
+    const initialLoadout = this.game.registry.get('playerLoadout');
+    this.playerLoadout = initialLoadout;
+    if (!initialLoadout) {
+      // If emergency transition, use default loadout
+      if (data?.matchData?.emergency) {
+        console.warn('⚠️ Emergency transition without loadout, using default');
+        const defaultLoadout = {
+          team: 'red',
+          primaryWeapon: 'rifle',
+          secondaryWeapon: 'pistol'
+        };
+        this.game.registry.set('playerLoadout', defaultLoadout);
+      } else {
+        console.error('GameScene: No player loadout configured! Returning to ConfigureScene.');
+        this.scene.stop('GameScene');  // Stop this scene to trigger cleanup
+        this.scene.start('ConfigureScene');
+        return;
+      }
     }
     
-    console.log('GameScene: Using configured loadout:', playerLoadout);
+    console.log('GameScene: Using configured loadout:', this.playerLoadout);
   }
 
   create(): void {
+    // Clean up LobbyStateManager to prevent interference
+    if ((window as any).LobbyStateManagerInstance) {
+      console.log('🧹 Cleaning up LobbyStateManager');
+      const manager = (window as any).LobbyStateManagerInstance;
+      manager.destroy();
+      delete (window as any).LobbyStateManagerInstance;
+    }
+    
+    console.log('🎮 GameScene starting');
+    
+    // Initialize NetworkSystem singleton
+    this.networkSystem = NetworkSystemSingleton.getInstance(this);
+    
     // Initialize AssetManager first
     this.assetManager = new AssetManager(this);
     
     // Create floor background using actual floor texture
-    this.createFloorBackground();
+    try {
+      this.createFloorBackground();
+      console.log('✅ Floor background created');
+    } catch (error) {
+      console.error('❌ Failed to create floor background:', error);
+      // Fallback: Create a simple colored rectangle
+      const fallbackFloor = this.add.rectangle(0, 0, GAME_CONFIG.GAME_WIDTH, GAME_CONFIG.GAME_HEIGHT, 0x1a1a1a);
+      fallbackFloor.setOrigin(0, 0);
+      fallbackFloor.setDepth(0);
+      console.log('⚠️ Using fallback floor');
+    }
 
     // Get configured loadout for weapon system
-    const playerLoadout = this.game.registry.get('playerLoadout');
+    const configuredLoadout = this.game.registry.get('playerLoadout');
     
     // Initialize systems first (before using them)
     this.inputSystem = new InputSystem(this);
     
     // Configure InputSystem with player's weapon loadout
-    if (playerLoadout) {
-      this.inputSystem.setLoadout(playerLoadout);
+    if (configuredLoadout) {
+      this.inputSystem.setLoadout(configuredLoadout);
+      this.playerLoadout = configuredLoadout; // Store for later use
     }
     
     // Get NetworkSystem singleton (will update scene reference)
@@ -139,10 +188,10 @@ export class GameScene extends Phaser.Scene {
     this.setupAudioListeners();
     
     // Create local player sprite with configured loadout
-    const teamColor = playerLoadout?.team || 'blue'; // Fallback to blue if no team configured
+    const teamColor = this.playerLoadout?.team || 'blue'; // Fallback to blue if no team configured
     
     // Debug log to verify team assignment
-    console.log(`🎨 Creating local player with team: ${teamColor} (from loadout: ${playerLoadout?.team})`);
+    console.log(`🎨 Creating local player with team: ${teamColor} (from loadout: ${this.playerLoadout?.team})`);
     
     this.playerSprite = this.assetManager.createPlayer(
       this.playerPosition.x,
@@ -151,9 +200,17 @@ export class GameScene extends Phaser.Scene {
     );
     this.playerSprite.setDepth(21); // Above other players
     this.playerSprite.setRotation(Math.PI / 2); // Start with 90-degree clockwise rotation
+    this.playerSprite.setVisible(true); // Ensure player is visible
+    this.playerSprite.setAlpha(1); // Ensure player is fully opaque
+    console.log('👤 Player sprite created:', {
+      position: this.playerPosition,
+      team: teamColor,
+      visible: this.playerSprite.visible,
+      alpha: this.playerSprite.alpha
+    });
     
     // Create weapon sprite for local player using configured primary weapon
-    const initialWeapon = playerLoadout?.primary || 'smg'; // Fallback to SMG if no primary configured
+    const initialWeapon = this.playerLoadout?.primary || 'smg'; // Fallback to SMG if no primary configured
     this.playerWeapon = this.assetManager.createWeapon(
       this.playerPosition.x,
       this.playerPosition.y,
@@ -199,7 +256,13 @@ export class GameScene extends Phaser.Scene {
     this.clientPrediction.setPositionCallback((pos) => {
       this.playerPosition.x = pos.x;
       this.playerPosition.y = pos.y;
-      this.playerSprite.setPosition(pos.x, pos.y); // Update sprite position
+      try {
+        if (this.playerSprite && this.playerSprite.scene) {
+          this.playerSprite.setPosition(pos.x, pos.y); // Update sprite position
+        }
+      } catch (error) {
+        console.error('❌ Error setting player sprite position from ClientPrediction:', error);
+      }
       
       // Update weapon position with both shoulder and forward offsets
       const shoulderOffset = 8; // Distance from center to shoulder  
@@ -228,100 +291,164 @@ export class GameScene extends Phaser.Scene {
     // Add coordinate debug visualization
     this.addCoordinateDebug();
     
-    // CRITICAL: Create lobby FIRST, then join it!
-    if (this.networkSystem && this.networkSystem.isAuthenticated()) {
-      const socket = this.networkSystem.getSocket();
+    // Check if we came from the proper flow (should have matchData)
+    const isDirectConnection = !this.matchData;
+    
+    if (isDirectConnection) {
+      console.warn('⚠️ GameScene started without matchData! This should not happen in normal flow.');
+      console.log('🔄 Redirecting to LobbyMenuScene to properly join a match...');
       
-      // Set up lobby event listeners FIRST
-      socket?.once('private_lobby_created', (data: any) => {
-        console.log('🎮 Private lobby created:', data.lobbyId);
-      });
-      
-      socket?.once('lobby_joined', (data: any) => {
-        console.log('🎮 Successfully joined lobby:', data.lobbyId);
-        console.log('🎮 Lobby info:', data);
+      // Store a flag to prevent infinite loops
+      const hasRedirected = this.game.registry.get('gameSceneRedirected');
+      if (!hasRedirected) {
+        this.game.registry.set('gameSceneRedirected', true);
+        // Clear the flag after a delay
+        this.time.delayedCall(1000, () => {
+          this.game.registry.set('gameSceneRedirected', false);
+        });
         
-        // NOW we can send player:join with loadout
-        if (playerLoadout) {
-          console.log('🎮 GameScene: Sending player:join with loadout to lobby');
-          this.networkSystem.emit('player:join', {
-            loadout: playerLoadout,
-            timestamp: Date.now()
-          });
-          
-          // Also emit match_started in case backend needs it
-          console.log('🎮 Requesting match start for development mode');
-          this.networkSystem.emit('match_started', {});
-          this.networkSystem.emit('request_game_state', {});
-        }
-      });
-      
-      // Create a private lobby for direct connections
-      console.log('🎮 GameScene: Creating private lobby for direct connection');
-      this.networkSystem.emit('create_private_lobby', { 
-        gameMode: 'deathmatch',
-        maxPlayers: 8,
-        password: ''  // No password for dev mode
-      });
+        // Redirect to lobby menu
+        this.scene.stop('GameScene');  // Explicitly stop this scene
+        this.scene.start('LobbyMenuScene');
+        return; // Stop initialization
+      } else {
+        console.error('❌ Already redirected once, preventing infinite loop');
+        // Continue with direct connection fallback
+      }
     }
-      
-    // Failsafe: Send again after 1 second in case the first one was too early
-    if (playerLoadout) {
-      this.time.delayedCall(1100, () => {
-        if (this.networkSystem && this.networkSystem.isAuthenticated()) {
-          console.log('🎮 GameScene: Sending player:join again (failsafe)');
-          this.networkSystem.emit('player:join', {
-            loadout: playerLoadout,
-            timestamp: Date.now()
-          });
-          this.networkSystem.emit('request_game_state', {});
-          this.networkSystem.emit('player:ready', {});
-        }
-      });
+    
+    // Store match data if not provided
+    if (!this.matchData) {
+      this.matchData = {
+        lobbyId: 'game_' + Date.now(),
+        status: 'in_progress',
+        playerCount: 1,
+        maxPlayers: 8,
+        password: ''
+      };
     }
 
     // Add debug instructions to UI
     const debugText = this.add.text(5, GAME_CONFIG.GAME_HEIGHT - 20, 
-      'Debug: \\ - admin auth, F - toggle fog, T - test mode', {
+      'Debug: \\ - admin auth, F - toggle fog', {
       fontSize: '7px',
       color: '#666666'
     }).setOrigin(0, 1);
 
-    // Add keyboard shortcut for test mode
-    this.input.keyboard?.on('keydown-T', () => {
-      console.log('🧪 T key pressed - activating test mode');
-      this.forceTestMode();
+    // Add keyboard shortcut to manually request game state (for debugging)
+    this.input.keyboard?.on('keydown-R', () => {
+      console.log('🔄 R key pressed - requesting game state from backend');
+      const socket = this.networkSystem.getSocket();
+      if (socket && socket.connected) {
+        socket.emit('request_game_state', {});
+        console.log('📡 Sent request_game_state');
+      } else {
+        console.error('❌ Socket not connected');
+      }
     });
     
-    // 🧪 TEST MODE: Add emergency test button
-    const testButton = this.add.text(GAME_CONFIG.GAME_WIDTH - 5, 5, '🧪 TEST MODE', {
-      fontSize: '10px',
-      color: '#ffffff',
-      backgroundColor: '#ff6600',
-      padding: { x: 8, y: 4 },
-      fontFamily: 'monospace'
-    }).setOrigin(1, 0);
-    
-    testButton.setInteractive({ useHandCursor: true });
-    testButton.on('pointerdown', () => {
-      console.log('🧪 TEST MODE: Forcing game to start without backend data');
-      this.forceTestMode();
+    // Add debug key to check wall status
+    this.input.keyboard?.on('keydown-W', () => {
+      console.log('🧱 Wall Status Check:');
+      console.log('  - DestructionRenderer walls:', this.destructionRenderer.getWallCount());
+      console.log('  - Wall sprites rendered:', this.wallSliceSprites.size);
+      console.log('  - Sample walls:', this.destructionRenderer.getWallsData().slice(0, 3));
+      
+      // Force an immediate wall update
+      this.updateWallsFromDestructionRenderer();
+      console.log('  - After forced update:', this.wallSliceSprites.size);
     });
     
-    // Check if we're in test mode (launched directly)
-    const isTestMode = this.game.registry.get('testMode');
-    if (isTestMode) {
-      console.log('🧪 DETECTED TEST MODE FLAG: Auto-activating test mode');
-      this.time.delayedCall(1000, () => {
-        this.forceTestMode();
+
+    
+    // Add ESC key to leave game
+    this.input.keyboard?.on('keydown-ESC', () => {
+      this.scene.stop('GameScene');
+      this.scene.start('LobbyMenuScene');
+    });
+    
+    // Development: Add test mode button (only for development)
+    if (this.game.config.physics?.arcade?.debug) {
+      const testButton = this.add.text(GAME_CONFIG.GAME_WIDTH - 5, 5, '🧪 DEV MODE', {
+        fontSize: '10px',
+        color: '#ffffff',
+        backgroundColor: '#444444',
+        padding: { x: 8, y: 4 },
+        fontFamily: 'monospace'
+      }).setOrigin(1, 0);
+      
+      testButton.setInteractive({ useHandCursor: true });
+      testButton.on('pointerdown', () => {
+        console.log('🧪 DEV MODE: Creating test environment');
+        this.createTestEnvironment();
       });
     }
 
     // Start game loop
-    console.log('GameScene created successfully');
+    console.log('✅ GameScene initialized successfully');
+    
+    // Log initialization status
+    console.log('📊 Systems initialized:', {
+      floor: this.floorSprites.length > 0,
+      player: !!this.playerSprite,
+      input: !!this.inputSystem,
+      destruction: !!this.destructionRenderer,
+      vision: !!this.visionRenderer,
+      network: !!this.networkSystem
+    });
+    
+    // Check for pending game state AFTER all systems are initialized
+    const pendingGameState = this.game.registry.get('pendingGameState');
+    if (pendingGameState) {
+      console.log('📦 Found pending game state, processing after init...');
+      this.game.registry.remove('pendingGameState');
+      // Process it immediately now that everything is ready
+      this.events.emit('network:gameState', pendingGameState);
+    }
+    
+    // Send player:join to backend now that scene is ready
+    const finalLoadout = this.game.registry.get('playerLoadout');
+    if (finalLoadout && this.networkSystem.getSocket()?.connected) {
+      console.log('📤 Sending player:join with loadout');
+      this.networkSystem.emit('player:join', {
+        loadout: finalLoadout,
+        timestamp: Date.now()
+      });
+    }
   }
 
+  private updateWarned = false;
+  private frameCount = 0;
+  
   update(time: number, delta: number): void {
+    this.frameCount++;
+    
+    // Debug: Check if we're in the right scene
+    if (this.frameCount % 60 === 0) {
+      const activeScenes = this.scene.manager.getScenes(true);
+      if (activeScenes.length > 1) {
+        console.warn('⚠️ Multiple scenes active:', activeScenes.map(s => s.scene.key));
+      }
+      
+      // Periodic health check
+      if (this.frameCount % 300 === 0) { // Every 5 seconds
+        console.log('🏥 Health check at frame', this.frameCount);
+        console.log('  - FPS:', Math.round(this.game.loop.actualFps));
+        console.log('  - Sprites:', this.children.list.length);
+        console.log('  - Wall slices:', this.wallSliceSprites.size);
+        console.log('  - Socket listeners:', (this.networkSystem.getSocket() as any)?._callbacks ? Object.keys((this.networkSystem.getSocket() as any)._callbacks).length : 0);
+      }
+    }
+    
+    // Safety check for emergency transitions
+    if (!this.playerSprite || !this.inputSystem) {
+      if (!this.updateWarned) {
+        console.warn('⚠️ Update called but systems not ready, skipping frames');
+        this.updateWarned = true;
+      }
+      return;
+    }
+    
     // Update local player movement FIRST for immediate feedback
     this.updateLocalPlayer(delta);
 
@@ -337,7 +464,13 @@ export class GameScene extends Phaser.Scene {
     );
 
     // Update player sprite rotation to face mouse (rotated 90 degrees clockwise)
-    this.playerSprite.setRotation(this.playerRotation + Math.PI / 2);
+    try {
+      if (this.playerSprite && this.playerSprite.scene) {
+        this.playerSprite.setRotation(this.playerRotation + Math.PI / 2);
+      }
+    } catch (error) {
+      console.error('❌ Error updating player sprite rotation:', error);
+    }
     
     // Update weapon position and rotation for shoulder mounting
     const shoulderOffset = 8; // Distance from center to shoulder
@@ -527,8 +660,10 @@ export class GameScene extends Phaser.Scene {
       this.grenadeChargeBar.strokeRect(barX, barY, barWidth, barHeight);
     }
 
-    // Update walls using DestructionRenderer
-    this.updateWallsFromDestructionRenderer();
+    // Update walls using DestructionRenderer - only update every 10 frames to reduce overhead
+    if (this.frameCount % 10 === 0) {
+      this.updateWallsFromDestructionRenderer();
+    }
   }
 
   private updateWallsFromDestructionRenderer(): void {
@@ -538,6 +673,11 @@ export class GameScene extends Phaser.Scene {
     // Get walls from DestructionRenderer - only include boundary walls if debug mode is on
     const showBoundaryWalls = (this as any).showBoundaryWalls || false;
     const walls = this.destructionRenderer.getWallsData(showBoundaryWalls);
+    
+    // Log wall update status periodically
+    if (this.frameCount % 600 === 0 || walls.length > 0 && this.wallSliceSprites.size === 0) {
+      console.log(`🧱 Wall rendering: ${walls.length} walls, ${this.wallSliceSprites.size} sprites`);
+    }
     
     // Track which wall slices we should have sprites for
     const expectedSliceIds = new Set<string>();
@@ -695,41 +835,29 @@ export class GameScene extends Phaser.Scene {
 
     // Set up network authentication
     this.events.on('network:authenticated', (data: any) => {
-      console.log('🎮 GameScene: Authentication successful, preparing to join game');
+      console.log('🎮 GameScene: Authentication successful');
       
       // Set local player ID for proper identification
       const socketId = this.networkSystem.getSocket()?.id;
       if (socketId) {
         this.setLocalPlayerId(socketId);
       }
-      
-      // Wait a moment for the backend to be ready, then send player:join
-      this.time.delayedCall(500, () => {
-        const loadout = this.game.registry.get('playerLoadout');
-        if (loadout) {
-          console.log('🎮 GameScene: Sending player:join with loadout');
-          this.networkSystem.emit('player:join', {
-            loadout: loadout,
-            timestamp: Date.now()
-          });
-          
-          // Failsafe: Send again after another delay
-          this.time.delayedCall(1000, () => {
-            console.log('🎮 GameScene: Sending player:join again (failsafe)');
-            this.networkSystem.emit('player:join', {
-              loadout: loadout,
-              timestamp: Date.now()
-            });
-          });
-        } else {
-          console.error('❌ No loadout found when trying to join game!');
-        }
-      });
     });
 
     // Game state updates from server
     this.events.on('network:gameState', (gameState: GameState) => {
       this.lastGameStateTime = Date.now();
+      
+      // Log game state reception
+      const wallCount = gameState.walls ? Object.keys(gameState.walls).length : 0;
+      const playerCount = Object.keys(gameState.players || {}).length;
+      
+      // console.log('📊 Processing game state:', {
+      //   walls: wallCount,
+      //   players: playerCount,
+      //   vision: !!gameState.vision,
+      //   visiblePlayers: gameState.visiblePlayers ? Object.keys(gameState.visiblePlayers).length : 0
+      // });
       
       // Set local player ID for PlayerManager
       const myPlayerId = this.networkSystem.getSocket()?.id;
@@ -1031,6 +1159,28 @@ export class GameScene extends Phaser.Scene {
     // Handle new players joining
     this.events.on('network:playerJoined', (data: any) => {
       console.log('👥 New player joined:', data);
+      console.log('🔍 DEBUG: Current wall count:', this.wallSliceSprites.size);
+      console.log('🔍 DEBUG: Current player position:', this.playerPosition);
+      console.log('🔍 DEBUG: Is this private lobby?', this.matchData?.isPrivate);
+      
+      // Check scene state when player joins
+      console.log('🎬 SCENE STATE ON PLAYER JOIN:');
+      const activeScenes = this.scene.manager.getScenes(true);
+      console.log('  - Active scenes:', activeScenes.map(s => s.scene.key));
+      console.log('  - This scene active?', this.scene.isActive());
+      console.log('  - This scene visible?', this.scene.isVisible());
+      
+      // Check if LobbyStateManager is still around
+      import('../systems/LobbyStateManager').then(module => {
+        if (module.LobbyStateManager) {
+          const instance = module.LobbyStateManager.getInstance();
+          const state = instance.getState();
+          console.log('  - LobbyStateManager state:', state);
+          if (state) {
+            console.warn('⚠️ LobbyStateManager still has state during gameplay!');
+          }
+        }
+      }).catch(() => {});
       
       // Ensure the new player gets rendered if they're visible
       if (data.playerState) {
@@ -1054,11 +1204,9 @@ export class GameScene extends Phaser.Scene {
         console.warn('⚠️ Player joined but missing playerState or position data:', data);
       }
       
-      // Failsafe: Force a game state update after a short delay to catch any missed players
-      this.time.delayedCall(500, () => {
-        console.log('🔄 Requesting fresh game state after player join');
-        this.networkSystem.emit('request:gamestate');
-      });
+      // Don't request fresh game state - it can cause issues with walls disappearing
+      // and players being reset to spawn positions
+      console.log('📝 Note: Not requesting fresh game state after player join to preserve game integrity');
     });
 
     // Handle players leaving
@@ -1375,11 +1523,36 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  private updateLocalPlayerWarned = false;
+  private movementLogged = false;
+  
   private updateLocalPlayer(delta: number): void {
+    // Safety checks
+    if (!this.inputSystem || !this.clientPrediction) {
+      if (!this.updateLocalPlayerWarned) {
+        console.warn('⚠️ updateLocalPlayer: Systems not ready');
+        this.updateLocalPlayerWarned = true;
+      }
+      return;
+    }
+    
     // Get current input state
     const inputState = this.inputSystem.getInputState();
     const movement = this.inputSystem.getMovementDirection();
     const speed = this.inputSystem.getMovementSpeed();
+   
+    // Debug: Log when movement starts (only once)
+    if (!this.movementLogged && (movement.x !== 0 || movement.y !== 0)) {
+      console.log('🎮 Movement detected:', movement, 'Speed:', speed);
+      this.movementLogged = true;
+      
+      // Add freeze debug
+      console.log('🔍 Pre-movement state check:');
+      console.log('  - Frame:', this.frameCount);
+      console.log('  - Active scenes:', this.scene.manager.getScenes(true).map(s => s.scene.key));
+      console.log('  - Input buffer size:', (this.clientPrediction as any).inputBuffer?.length);
+      console.log('  - Wall count:', this.wallSliceSprites.size);
+    }
    
     // Apply input through client prediction for server sync
     if (inputState.sequence > 0) { // Only apply if we have a valid sequence
@@ -1389,11 +1562,20 @@ export class GameScene extends Phaser.Scene {
         movement,
         movementSpeed: speed
       };
-      this.clientPrediction.applyInput(inputWithMovement, inputState.sequence);
+      
+      try {
+        this.clientPrediction.applyInput(inputWithMovement, inputState.sequence);
+      } catch (error) {
+        console.error('❌ Error applying input to client prediction:', error);
+      }
     }
     
     // Update render positions with smooth corrections
-    this.clientPrediction.updateRenderPosition(delta / 1000);
+    try {
+      this.clientPrediction.updateRenderPosition(delta / 1000);
+    } catch (error) {
+      console.error('❌ Error updating render position:', error);
+    }
     
     // No more color changes for movement speed - using real sprite now
   }
@@ -1417,13 +1599,13 @@ export class GameScene extends Phaser.Scene {
 
   private createUI(): void {
     // Create input state display for debugging - moved to bottom left
-    const inputText = this.add.text(5, GAME_CONFIG.GAME_HEIGHT - 5, '', {
+    this.inputText = this.add.text(5, GAME_CONFIG.GAME_HEIGHT - 5, '', {
       fontSize: '8px',
       color: '#ffffff',
       lineSpacing: -1  // Slightly tighter line spacing
     });
-    inputText.setOrigin(0, 1);
-    inputText.setDepth(100);
+    this.inputText.setOrigin(0, 1);
+    this.inputText.setDepth(100);
     
     // Debug overlay for game state tracking
     this.debugOverlay = this.add.text(GAME_CONFIG.GAME_WIDTH - 5, GAME_CONFIG.GAME_HEIGHT - 5, 
@@ -1434,6 +1616,11 @@ export class GameScene extends Phaser.Scene {
 
     // Update input display every frame
     this.events.on('update', () => {
+      // Safety check - ensure UI elements still exist
+      if (!this.inputText || !this.inputText.scene) {
+        return;
+      }
+      
       if (this.inputSystem && this.visualEffectsSystem && this.weaponUI) {
         const inputState = this.inputSystem.getInputState();
         const direction = this.inputSystem.getMovementDirection();
@@ -1443,7 +1630,7 @@ export class GameScene extends Phaser.Scene {
         const isADS = this.inputSystem.isAimingDownSights();
         const effectCounts = this.visualEffectsSystem.getEffectCounts();
         
-        inputText.setText([
+        this.inputText.setText([
           `Pos: ${this.playerPosition.x.toFixed(0)},${this.playerPosition.y.toFixed(0)} | Move: ${(speed * 100).toFixed(0)}%`,
           `Wpn: ${currentWeapon || 'None'} ${isADS ? 'ADS' : ''} | Gren: ${grenadeCharge}/5`,
           `FX: F${effectCounts.muzzleFlashes} E${effectCounts.explosions} H${effectCounts.hitMarkers} P${effectCounts.particles}`,
@@ -1505,6 +1692,26 @@ export class GameScene extends Phaser.Scene {
   }
 
   shutdown(): void {
+    // Clean up socket listeners
+    const socket = this.networkSystem?.getSocket();
+    if (socket && (this as any).matchEndedHandler) {
+      socket.off('match_ended', (this as any).matchEndedHandler);
+    }
+    
+    // Clean up event listeners first
+    this.events.off('update');
+    this.input.off('pointermove');
+    
+    // Clean up UI elements
+    if (this.inputText) {
+      this.inputText.destroy();
+      this.inputText = undefined;
+    }
+    if (this.mouseText) {
+      this.mouseText.destroy();
+      this.mouseText = undefined;
+    }
+    
     // Clean up systems
     if (this.inputSystem) {
       this.inputSystem.destroy();
@@ -1512,7 +1719,6 @@ export class GameScene extends Phaser.Scene {
     
     // DO NOT destroy NetworkSystem - it's a singleton that should persist!
     // The NetworkSystemSingleton manages its lifecycle
-    console.log('GameScene: Shutting down - NetworkSystem singleton preserved');
     
     if (this.visualEffectsSystem) {
       this.visualEffectsSystem.destroy();
@@ -1553,11 +1759,14 @@ export class GameScene extends Phaser.Scene {
     // Grid lines removed - no more green lines on the floor
     
     // Show mouse world position on move - top right corner
-    const mouseText = this.add.text(GAME_CONFIG.GAME_WIDTH - 5, 15, '', { fontSize: '8px', color: '#ffff00' });
-    mouseText.setOrigin(1, 0);
+    this.mouseText = this.add.text(GAME_CONFIG.GAME_WIDTH - 5, 15, '', { fontSize: '8px', color: '#ffff00' });
+    this.mouseText.setOrigin(1, 0);
     this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
+      if (!this.mouseText || !this.mouseText.scene) {
+        return;
+      }
       const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
-      mouseText.setText(`Mouse: (${worldPoint.x.toFixed(0)}, ${worldPoint.y.toFixed(0)})`);
+      this.mouseText.setText(`Mouse: (${worldPoint.x.toFixed(0)}, ${worldPoint.y.toFixed(0)})`);
     });
   }
 
@@ -1648,11 +1857,14 @@ export class GameScene extends Phaser.Scene {
 
     console.log('🎯 Setting up match lifecycle listeners');
 
-    // Match ended - show results screen
-    socket.on('match_ended', (data: any) => {
+    // Store the handler so we can remove it later
+    (this as any).matchEndedHandler = (data: any) => {
       console.log('🏁 Match ended:', data);
+      this.scene.stop('GameScene');  // Stop this scene to trigger cleanup
       this.scene.start('MatchResultsScene', { matchResults: data });
-    });
+    };
+    
+    socket.on('match_ended', (this as any).matchEndedHandler);
 
     // Match starting countdown (if applicable)
     socket.on('match_starting', (data: any) => {
@@ -1765,8 +1977,8 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  // 🧪 TEST MODE: Force game to work without proper backend data
-  private forceTestMode(): void {
+  // Development method to create a test environment
+  private createTestEnvironment(): void {
     console.log('🧪 FORCE TEST MODE: Creating complete test environment with map');
     
     // Create the map background if it doesn't exist
@@ -1777,19 +1989,93 @@ export class GameScene extends Phaser.Scene {
       console.log('🧪 TEST MODE: Created map background');
     }
 
-    // Create some test walls if collision system exists
-    if (this.collisionSystem) {
-      // Add a few test walls
-      const testWalls = [
-        { x: 100, y: 100, width: 20, height: 60 },
-        { x: 300, y: 150, width: 20, height: 60 },
-        { x: 200, y: 200, width: 60, height: 20 }
+    // Create a proper test map with walls via DestructionRenderer
+    if (this.destructionRenderer) {
+      // Create a simple box arena with some internal walls
+      const testWalls: any = {};
+      
+      // Outer boundaries
+      for (let x = 0; x < GAME_CONFIG.GAME_WIDTH; x += 10) {
+        testWalls[`wall_top_${x}`] = {
+          id: `wall_top_${x}`,
+          x: x,
+          y: 0,
+          type: 'concrete',
+          material: 'concrete',
+          width: 10,
+          height: 10,
+          health: 200,
+          destructionMask: Array(100).fill(1)
+        };
+        testWalls[`wall_bottom_${x}`] = {
+          id: `wall_bottom_${x}`,
+          x: x,
+          y: GAME_CONFIG.GAME_HEIGHT - 10,
+          type: 'concrete',
+          material: 'concrete',
+          width: 10,
+          height: 10,
+          health: 200,
+          destructionMask: Array(100).fill(1)
+        };
+      }
+      
+      for (let y = 10; y < GAME_CONFIG.GAME_HEIGHT - 10; y += 10) {
+        testWalls[`wall_left_${y}`] = {
+          id: `wall_left_${y}`,
+          x: 0,
+          y: y,
+          type: 'concrete',
+          material: 'concrete',
+          width: 10,
+          height: 10,
+          health: 200,
+          destructionMask: Array(100).fill(1)
+        };
+        testWalls[`wall_right_${y}`] = {
+          id: `wall_right_${y}`,
+          x: GAME_CONFIG.GAME_WIDTH - 10,
+          y: y,
+          type: 'concrete',
+          material: 'concrete',
+          width: 10,
+          height: 10,
+          health: 200,
+          destructionMask: Array(100).fill(1)
+        };
+      }
+      
+      // Add some internal walls for cover
+      const internalWalls = [
+        { x: 100, y: 80, w: 10, h: 40, type: 'wood' },
+        { x: 200, y: 120, w: 40, h: 10, type: 'wood' },
+        { x: 300, y: 100, w: 10, h: 60, type: 'concrete' },
+        { x: 150, y: 180, w: 60, h: 10, type: 'wood' },
+        { x: 250, y: 50, w: 10, h: 40, type: 'concrete' }
       ];
       
-      testWalls.forEach(wall => {
-        this.collisionSystem.addWall(wall.x, wall.y, wall.width, wall.height);
+      internalWalls.forEach((wall, i) => {
+        for (let x = 0; x < wall.w; x += 10) {
+          for (let y = 0; y < wall.h; y += 10) {
+            const id = `wall_internal_${i}_${x}_${y}`;
+            testWalls[id] = {
+              id: id,
+              x: wall.x + x,
+              y: wall.y + y,
+              type: wall.type,
+              material: wall.type,
+              width: 10,
+              height: 10,
+              health: wall.type === 'wood' ? 100 : 200,
+              destructionMask: Array(100).fill(1)
+            };
+          }
+        }
       });
-      console.log('🧪 TEST MODE: Added test walls');
+      
+      // Send walls to destruction renderer
+      this.destructionRenderer.updateWallsFromGameState(testWalls);
+      console.log(`🧪 TEST MODE: Created ${Object.keys(testWalls).length} test walls`);
     }
     
     // Create a minimal test player
@@ -1804,9 +2090,11 @@ export class GameScene extends Phaser.Scene {
       isLocal: true
     };
 
-    // Add to player manager
-    this.playerManager.updatePlayer(testPlayer);
+    // Set local player ID
     this.playerManager.setLocalPlayerId(testPlayer.id);
+    
+    // Add to player manager via the proper method
+    this.events.emit('network:playerJoined', testPlayer);
 
     // Create minimal game state with proper map data
     const testGameState = {
