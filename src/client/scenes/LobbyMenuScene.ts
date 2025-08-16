@@ -67,14 +67,19 @@ export class LobbyMenuScene extends Phaser.Scene {
     this.networkSystem.getSocket()?.on('lobby_joined', (data: any) => {
       console.log('🏢 Lobby joined:', data);
       
-      // Check if the lobby is already playing
-      if (data.status === 'playing' || data.isInProgress) {
-        console.log('🎮 Joining game in progress, going directly to GameScene');
+      // Check if this is a true mid-game join (game has been running for a while)
+      const gameStartTime = data.gameStartTime;
+      const currentTime = Date.now();
+      const timeSinceStart = gameStartTime ? (currentTime - gameStartTime) / 1000 : 0;
+      
+      // Only skip configuration if game has been actively running for more than 30 seconds
+      if ((data.status === 'playing' || data.isInProgress) && timeSinceStart > 30) {
+        console.log(`🎮 Joining mid-game (started ${timeSinceStart}s ago), going directly to GameScene`);
         
         // Stop this scene immediately
         this.scene.stop();
         
-        // Use direct scene start for late joins
+        // Use direct scene start for true late joins
         this.scene.manager.start('GameScene', { 
           matchData: {
             lobbyId: data.lobbyId,
@@ -84,7 +89,8 @@ export class LobbyMenuScene extends Phaser.Scene {
           }
         });
       } else {
-        // Go to waiting room for lobbies that haven't started
+        // Go to waiting room/configuration for new matches or recent starts
+        console.log(`🏢 Joining lobby for configuration (game time: ${timeSinceStart}s)`);
         this.scene.start('LobbyWaitingScene', { lobbyData: data });
       }
     });

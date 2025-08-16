@@ -197,13 +197,19 @@ export class ServerBrowserScene extends Phaser.Scene {
       console.log('✅ Joined lobby:', data);
       
       // Check if the lobby is already playing
-      if (data.status === 'playing' || data.isInProgress) {
-        console.log('🎮 Joining game in progress, going directly to GameScene');
+      // Check if this is a true mid-game join (game has been running for a while)
+      const gameStartTime = data.gameStartTime;
+      const currentTime = Date.now();
+      const timeSinceStart = gameStartTime ? (currentTime - gameStartTime) / 1000 : 0;
+      
+      // Only skip configuration if game has been actively running for more than 30 seconds
+      if ((data.status === 'playing' || data.isInProgress) && timeSinceStart > 30) {
+        console.log(`🎮 Joining mid-game (started ${timeSinceStart}s ago), going directly to GameScene`);
         
         // Stop this scene immediately and go to game
         this.scene.stop();
         
-        // Use direct scene start instead of transition for late joins
+        // Use direct scene start for true late joins
         this.scene.manager.start('GameScene', { 
           matchData: {
             lobbyId: data.lobbyId,
@@ -213,39 +219,9 @@ export class ServerBrowserScene extends Phaser.Scene {
           }
         });
       } else {
-        // For waiting lobbies, check if match starts immediately
-        console.log('📝 Joining waiting lobby, checking for immediate start');
-        
-        // Set up one-time listener for immediate match start
-        let immediateStart = false;
-        const matchStartHandler = (matchData: any) => {
-          console.log('🚀 Match started immediately after joining lobby');
-          immediateStart = true;
-          socket.off('match_started', matchStartHandler);
-          
-          // Stop this scene and go directly to game
-          this.scene.stop();
-          
-          // Use direct scene start for immediate matches
-          this.scene.manager.start('GameScene', { 
-            matchData: {
-              lobbyId: matchData.lobbyId,
-              isLateJoin: true,
-              killTarget: matchData.killTarget || 50,
-              gameMode: matchData.gameMode || 'deathmatch'
-            }
-          });
-        };
-        
-        socket.once('match_started', matchStartHandler);
-        
-        // Wait a moment to see if match starts immediately
-        this.time.delayedCall(300, () => {
-          if (!immediateStart && this.scene.isActive()) {
-            socket.off('match_started', matchStartHandler);
-            this.scene.start('LobbyWaitingScene', { lobbyData: data });
-          }
-        });
+        // For new matches or recent starts, go to configuration
+        console.log(`📝 Joining lobby for configuration (game time: ${timeSinceStart}s)`);
+        this.scene.start('LobbyWaitingScene', { lobbyData: data });
       }
     });
   }

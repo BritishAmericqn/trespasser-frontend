@@ -11,10 +11,12 @@ import {
 } from '../../../shared/constants/weapons';
 import NetworkSystemSingleton from '../systems/NetworkSystemSingleton';
 import { ConnectionState } from '../systems/NetworkSystem';
+import LobbyEventCoordinator from '../systems/LobbyEventCoordinator';
 
 export class ConfigureScene extends Phaser.Scene {
   private loadout: PlayerLoadout = { ...DEFAULT_LOADOUT };
   private wallPositions: Array<{x: number, y: number, width: number, height: number}> = [];
+  private matchData: any = null; // Store match data passed from lobby
   
   // UI Elements
   private leftPanel!: Phaser.GameObjects.Container;
@@ -55,19 +57,30 @@ export class ConfigureScene extends Phaser.Scene {
     super({ key: 'ConfigureScene' });
   }
 
+  init(data?: any): void {
+    // Store match data if provided from lobby
+    if (data && data.matchData) {
+      this.matchData = data.matchData;
+      console.log('🎮 ConfigureScene received matchData:', this.matchData);
+    } else {
+      this.matchData = null;
+      console.log('🎮 ConfigureScene - no matchData (normal flow)');
+    }
+  }
+
   create(): void {
-    // Check if we have an active match (shouldn't be in ConfigureScene if there's a match)
+    // IMMEDIATELY register with LobbyEventCoordinator
     if (typeof NetworkSystemSingleton !== 'undefined' && NetworkSystemSingleton.hasInstance()) {
       const networkSystem = NetworkSystemSingleton.getInstance(this);
-      const socket = networkSystem.getSocket();
       
+      // Register with coordinator right away to handle any match_started events
+      const coordinator = LobbyEventCoordinator.getInstance();
+      coordinator.registerActiveScene(this);
+      console.log('🎭 ConfigureScene: Early registration with coordinator complete');
+      
+      const socket = networkSystem.getSocket();
       if (socket) {
-        // Listen for match_started in case we're here by mistake
-        socket.once('match_started', (data: any) => {
-          console.log('🚀 Match started while in ConfigureScene, transitioning to GameScene');
-          this.scene.start('GameScene', { matchData: data });
-        });
-        
+        // Note: match_started is now handled by LobbyEventCoordinator
         // Don't listen for game:state here - NetworkSystem handles it
       }
     }
@@ -168,6 +181,8 @@ export class ConfigureScene extends Phaser.Scene {
     
     // Initialize with team tab active
     this.showTab('team');
+    
+    // Already registered with LobbyEventCoordinator early in create()
   }
 
   private createTeamSelection(): void {
@@ -669,8 +684,14 @@ export class ConfigureScene extends Phaser.Scene {
       isConnected = networkSystem.getConnectionState() === ConnectionState.AUTHENTICATED;
     }
     
-    // Update button text based on connection state
-    this.startGameButton.setText(isConnected ? 'JOIN GAME' : 'SAVE & BACK');
+    // Update button text based on connection state and match data
+    let buttonText = 'SAVE & BACK';
+    if (this.matchData) {
+      buttonText = 'START MATCH'; // We're in a lobby waiting to start
+    } else if (isConnected) {
+      buttonText = 'JOIN GAME'; // We're connected but no specific match
+    }
+    this.startGameButton.setText(buttonText);
     
     this.startGameButton.setStyle({
       backgroundColor: canStart ? (isConnected ? '#884400' : '#006600') : '#333333',
@@ -732,6 +753,13 @@ export class ConfigureScene extends Phaser.Scene {
         this.scene.start('MatchmakingScene', { gameMode: 'deathmatch', instantPlay: true });
         return;
       }
+    }
+    
+    // Check if we have match data from lobby (priority over pending match)
+    if (this.matchData) {
+      console.log('ConfigureScene: Found lobby matchData, going directly to game');
+      this.scene.start('GameScene', { matchData: this.matchData });
+      return;
     }
     
     // Check if we have a pending match from instant play
@@ -873,13 +901,12 @@ export class ConfigureScene extends Phaser.Scene {
   }
 
   shutdown(): void {
-    // Clean up socket listeners
-    const networkSystem = NetworkSystemSingleton.getInstance(this);
-    const socket = networkSystem?.getSocket();
-    if (socket) {
-      socket.off('match_started');
-      // Don't remove game:state - that's owned by NetworkSystem
-    }
+    // Unregister from LobbyEventCoordinator
+    const coordinator = LobbyEventCoordinator.getInstance();
+    coordinator.unregisterScene(this);
+    
+    // Clean up socket listeners if needed
+    // Note: match_started is handled by LobbyEventCoordinator
     
     // Clean up any timers
     this.time.removeAllEvents();

@@ -5,6 +5,7 @@ import { LobbyStateManager, LobbyState } from '../systems/LobbyStateManager';
 import { SceneManager } from '../utils/SceneManager';
 import { SceneDebugger } from '../systems/SceneDebugger';
 import { DebugOverlay } from '../ui/DebugOverlay';
+import LobbyEventCoordinator from '../systems/LobbyEventCoordinator';
 
 interface LobbyData {
   lobbyId: string;
@@ -62,6 +63,11 @@ export class LobbyWaitingScene extends Phaser.Scene {
     // Get NetworkSystem singleton
     this.networkSystem = NetworkSystemSingleton.getInstance(this);
     
+    // IMMEDIATELY register with LobbyEventCoordinator to intercept match_started events
+    const coordinator = LobbyEventCoordinator.getInstance();
+    coordinator.registerActiveScene(this);
+    console.log('🎭 LobbyWaitingScene: Early registration with coordinator complete');
+    
     // Initialize LobbyStateManager
     this.lobbyStateManager = LobbyStateManager.getInstance();
     const socket = this.networkSystem.getSocket();
@@ -101,6 +107,8 @@ export class LobbyWaitingScene extends Phaser.Scene {
     this.debugOverlay = new DebugOverlay(this);
     console.log('🔍 Press F9 to toggle debug overlay');
     
+    // Already registered with LobbyEventCoordinator early in create()
+    
     console.log('🏢 Lobby waiting scene created for:', this.lobbyData);
   }
 
@@ -129,30 +137,8 @@ export class LobbyWaitingScene extends Phaser.Scene {
       this.startCountdown();
     });
 
-    // Match started - go to game (only if scene is still active)
-    socket.on('match_started', (data: any) => {
-      if (!this.scene.isActive()) {
-        console.log('🚀 Match started but LobbyWaitingScene not active, ignoring');
-        return;
-      }
-      
-      console.log('🚀 Match started (LobbyWaitingScene):', data);
-      this.stopCountdown();
-      
-      // Cleanup LobbyStateManager to prevent duplicate events
-      if (this.lobbyStateManager) {
-        this.lobbyStateManager.destroy();
-        this.lobbyStateManager = undefined;
-      }
-      
-      // Remove all listeners to prevent conflicts
-      socket.off('match_started');
-      socket.off('match_starting');
-      socket.off('lobby_joined');
-      socket.off('player_left_lobby');
-      
-      SceneManager.transition(this, 'GameScene', { matchData: data });
-    });
+    // Note: match_started is now handled by LobbyEventCoordinator
+    // This scene only needs to handle other lobby events
     
     // Don't listen for game:state here - NetworkSystem handles it
 
@@ -676,6 +662,10 @@ export class LobbyWaitingScene extends Phaser.Scene {
 
   shutdown(): void {
     this.stopCountdown();
+    
+    // Unregister from LobbyEventCoordinator
+    const coordinator = LobbyEventCoordinator.getInstance();
+    coordinator.unregisterScene(this);
     
     // Unsubscribe from state changes
     if (this.stateUnsubscribe) {

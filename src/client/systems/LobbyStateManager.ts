@@ -111,17 +111,8 @@ export class LobbyStateManager {
       });
     });
 
-    this.socket.on('match_started', (data: any) => {
-      console.log('🚀 Match started:', data);
-      this.updateFromPartial({
-        status: 'in_progress'
-      });
-      // Clear state after a small delay to allow scenes to transition
-      setTimeout(() => {
-        console.log('🎮 Match started, clearing lobby state');
-        this.clearState();
-      }, 100);
-    });
+    // Note: match_started is now handled by LobbyEventCoordinator
+    // This manager only tracks state, not scene transitions
 
     // Clear state on disconnect or lobby leave
     this.socket.on('left_lobby', () => {
@@ -278,7 +269,7 @@ export class LobbyStateManager {
       this.socket.off('player_joined_lobby');
       this.socket.off('player_left_lobby');
       this.socket.off('match_starting');
-      this.socket.off('match_started');
+      // Note: match_started handled by LobbyEventCoordinator
     }
     
     this.socket = null;

@@ -88,15 +88,20 @@ export class MatchmakingScene extends Phaser.Scene {
       this.playerCount = data.playerCount || 1;
       this.maxPlayers = data.maxPlayers || 8;
       
-      // Check if the lobby is already playing
-      if (data.status === 'playing' || data.isInProgress) {
-        console.log('🎮 Joining game in progress, going directly to GameScene');
+      // Check if this is a true mid-game join (game has been running for a while)
+      const gameStartTime = data.gameStartTime;
+      const currentTime = Date.now();
+      const timeSinceStart = gameStartTime ? (currentTime - gameStartTime) / 1000 : 0;
+      
+      // Only skip configuration if game has been actively running for more than 30 seconds
+      if ((data.status === 'playing' || data.isInProgress) && timeSinceStart > 30) {
+        console.log(`🎮 Joining mid-game (started ${timeSinceStart}s ago), going directly to GameScene`);
         this.stopLoadingAnimation();
         
         // Stop this scene immediately
         this.scene.stop();
         
-        // Use direct scene start for late joins
+        // Use direct scene start for true late joins
         this.scene.manager.start('GameScene', { 
           matchData: {
             lobbyId: data.lobbyId,
@@ -150,33 +155,7 @@ export class MatchmakingScene extends Phaser.Scene {
       }
     });
     
-    // Direct match start (if backend starts match immediately)
-    socket.on('match_started', (data: any) => {
-      console.log('🚀 Match started directly from matchmaking:', data);
-      this.stopLoadingAnimation();
-      
-      // Clean up before transition
-      this.shutdown();
-      
-      if (this.instantPlay) {
-        // For instant play, check if we have a loadout
-        const playerLoadout = this.game.registry.get('playerLoadout');
-        if (!playerLoadout) {
-          // Need to configure loadout first
-          this.game.registry.set('pendingMatch', data);
-          this.scene.stop('MatchmakingScene');
-          this.scene.start('ConfigureScene');
-        } else {
-          // Have loadout, go directly to game
-          this.scene.stop('MatchmakingScene');
-          this.scene.start('GameScene', { matchData: data });
-        }
-      } else {
-        // Normal flow
-        this.scene.stop('MatchmakingScene');
-        this.scene.start('GameScene', { matchData: data });
-      }
-    });
+    // Note: match_started is now handled by LobbyEventCoordinator
     
     // Don't listen for game:state here - NetworkSystem handles it
     // If we need to know about game state, we should listen to Phaser events instead
@@ -543,8 +522,8 @@ export class MatchmakingScene extends Phaser.Scene {
       socket.off('lobby_joined');
       socket.off('player_joined_lobby');
       socket.off('player_left_lobby');
-      socket.off('match_started');
       socket.off('match_starting');
+      // Note: match_started handled by LobbyEventCoordinator
       // Don't remove game:state - that's owned by NetworkSystem
       socket.off('matchmaking_failed');
       socket.off('disconnect');
