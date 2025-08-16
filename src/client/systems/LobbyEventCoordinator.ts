@@ -103,11 +103,34 @@ export class LobbyEventCoordinator {
       }
       
       const sceneName = this.currentScene.scene.key;
-      const matchData: MatchData = {
-        lobbyId: data.lobbyId,
-        killTarget: data.killTarget || 50,
-        gameMode: data.gameMode || 'deathmatch'
-      };
+      
+      // Build matchData based on the current scene context
+      let matchData: MatchData;
+      
+      if (sceneName === 'LobbyWaitingScene') {
+        // For LobbyWaitingScene, use the original lobbyData from the scene
+        const lobbyWaitingScene = this.currentScene as any;
+        const originalLobbyData = lobbyWaitingScene.lobbyData;
+        
+        console.log('🎭 LobbyWaitingScene original lobbyData:', originalLobbyData);
+        
+        matchData = {
+          lobbyId: originalLobbyData?.lobbyId || data.lobbyId,
+          killTarget: originalLobbyData?.killTarget || data.killTarget || 50,
+          gameMode: originalLobbyData?.gameMode || data.gameMode || 'deathmatch',
+          // Preserve any additional data from the original lobby
+          ...originalLobbyData
+        };
+      } else {
+        // For other scenes, use match_started event data
+        matchData = {
+          lobbyId: data.lobbyId,
+          killTarget: data.killTarget || 50,
+          gameMode: data.gameMode || 'deathmatch'
+        };
+      }
+      
+      console.log('🎭 Constructed matchData:', matchData);
       
       // Route based on the active scene
       switch (sceneName) {
@@ -132,7 +155,11 @@ export class LobbyEventCoordinator {
         case 'MatchmakingScene':
           // ALWAYS go to ConfigureScene first - no exceptions!
           console.log(`🎭 Match started from ${sceneName} → ConfigureScene (universal loadout access)`);
-          SceneManager.transition(this.currentScene, 'ConfigureScene', {
+          
+          // Use direct scene management to ensure data is passed correctly
+          console.log('🎭 Using direct scene start to ensure matchData is preserved');
+          this.currentScene.scene.stop();
+          this.currentScene.scene.manager.start('ConfigureScene', {
             matchData: {
               ...matchData,
               isLateJoin: false  // Everyone gets configuration
@@ -150,7 +177,11 @@ export class LobbyEventCoordinator {
           console.warn(`🎭 Unhandled match_started from scene: ${sceneName}`);
           // ALWAYS go to ConfigureScene - universal loadout access
           console.log(`🎭 Fallback route for ${sceneName} → ConfigureScene (universal loadout access)`);
-          SceneManager.transition(this.currentScene, 'ConfigureScene', {
+          
+          // Use direct scene management to ensure data is passed correctly
+          console.log('🎭 Using direct scene start for fallback to ensure matchData is preserved');
+          this.currentScene.scene.stop();
+          this.currentScene.scene.manager.start('ConfigureScene', {
             matchData: {
               ...matchData,
               isLateJoin: false  // Everyone gets configuration

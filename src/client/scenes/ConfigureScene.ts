@@ -59,12 +59,28 @@ export class ConfigureScene extends Phaser.Scene {
 
   init(data?: any): void {
     // Store match data if provided from lobby
+    console.log('🎮 ConfigureScene init called with data:', data);
+    console.log('🎮 ConfigureScene data keys:', data ? Object.keys(data) : 'no data');
     if (data && data.matchData) {
       this.matchData = data.matchData;
       console.log('🎮 ConfigureScene received matchData:', this.matchData);
+      console.log('🎮 ConfigureScene matchData keys:', Object.keys(this.matchData));
     } else {
       this.matchData = null;
-      console.log('🎮 ConfigureScene - no matchData (normal flow)');
+      console.log('🎮 ConfigureScene - no matchData (normal flow), data was:', data);
+      
+      // Emergency fallback - try to get lobby data from registry if available
+      const emergencyLobbyData = this.game.registry.get('currentLobbyData');
+      if (emergencyLobbyData) {
+        console.log('🚨 ConfigureScene: Found emergency lobbyData in registry:', emergencyLobbyData);
+        this.matchData = {
+          lobbyId: emergencyLobbyData.lobbyId,
+          killTarget: emergencyLobbyData.killTarget || 50,
+          gameMode: emergencyLobbyData.gameMode || 'deathmatch',
+          isLateJoin: false
+        };
+        console.log('🚨 ConfigureScene: Created emergency matchData:', this.matchData);
+      }
     }
   }
 
@@ -731,12 +747,29 @@ export class ConfigureScene extends Phaser.Scene {
 
     // Store loadout for GameScene to use
     this.game.registry.set('playerLoadout', this.loadout);
-    console.log('ConfigureScene: Saved loadout to GAME registry:', this.loadout);
+    console.log('🎮 ConfigureScene: Saved loadout to GAME registry:', this.loadout);
+    console.log('🎮 ConfigureScene: Current matchData when starting game:', this.matchData);
     
-    // Check if we came from instant play flow
+    // PRIORITY 1: Check if we have match data from lobby (late joiners and normal lobby flow)
+    if (this.matchData) {
+      console.log('🎮 ConfigureScene: Found lobby matchData, going directly to GameScene');
+      this.scene.start('GameScene', { matchData: this.matchData });
+      return;
+    }
+    
+    // PRIORITY 2: Check if we have a pending match from instant play
+    const pendingMatch = this.game.registry.get('pendingMatch');
+    if (pendingMatch) {
+      console.log('🎮 ConfigureScene: Found pending match, going directly to GameScene');
+      this.game.registry.remove('pendingMatch');
+      this.scene.start('GameScene', { matchData: pendingMatch });
+      return;
+    }
+    
+    // PRIORITY 3: Check if we came from instant play flow (need to start matchmaking)
     const fromInstantPlay = this.game.registry.get('fromInstantPlay');
     if (fromInstantPlay) {
-      console.log('ConfigureScene: Came from instant play, starting matchmaking');
+      console.log('🎮 ConfigureScene: Came from instant play, starting matchmaking');
       this.game.registry.remove('fromInstantPlay');
       
       // Go directly to matchmaking with instant play mode
@@ -755,38 +788,22 @@ export class ConfigureScene extends Phaser.Scene {
       }
     }
     
-    // Check if we have match data from lobby (priority over pending match)
-    if (this.matchData) {
-      console.log('ConfigureScene: Found lobby matchData, going directly to game');
-      this.scene.start('GameScene', { matchData: this.matchData });
-      return;
-    }
-    
-    // Check if we have a pending match from instant play
-    const pendingMatch = this.game.registry.get('pendingMatch');
-    if (pendingMatch) {
-      console.log('ConfigureScene: Found pending match, going directly to game');
-      this.game.registry.remove('pendingMatch');
-      this.scene.start('GameScene', { matchData: pendingMatch });
-      return;
-    }
-    
-    // Check if we have NetworkSystemSingleton and are already connected
+    // PRIORITY 4: Check if connected but no specific match (should go to lobby to find/create one)
     if (typeof NetworkSystemSingleton !== 'undefined' && NetworkSystemSingleton.hasInstance()) {
       const networkSystem = NetworkSystemSingleton.getInstance(this);
       const connectionState = networkSystem.getConnectionState();
-      console.log('ConfigureScene: Connection state:', connectionState);
+      console.log('🎮 ConfigureScene: Connection state:', connectionState);
       
       if (connectionState === ConnectionState.AUTHENTICATED) {
         // Already connected, go to lobby menu to find/create a match
-        console.log('ConfigureScene: Already connected, going to LobbyMenuScene');
+        console.log('🎮 ConfigureScene: Already connected, going to LobbyMenuScene');
         this.scene.start('LobbyMenuScene');
         return;
       }
     }
     
-    // Not connected, return to MenuScene so user can connect to server with configured loadout
-    console.log('ConfigureScene: Not connected, returning to MenuScene');
+    // FALLBACK: Not connected, return to MenuScene so user can connect to server with configured loadout
+    console.log('🎮 ConfigureScene: Not connected, returning to MenuScene');
     this.scene.start('MenuScene');
   }
 

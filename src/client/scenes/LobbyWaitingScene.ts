@@ -49,6 +49,14 @@ export class LobbyWaitingScene extends Phaser.Scene {
   init(data: any): void {
     this.lobbyData = data.lobbyData;
     this.isPrivate = data.isPrivate || false;
+    
+    // Store lobby data in registry as backup for ConfigureScene
+    if (this.lobbyData) {
+      this.game.registry.set('currentLobbyData', this.lobbyData);
+      console.log('🏢 LobbyWaitingScene: Stored lobbyData in registry as backup:', this.lobbyData);
+    } else {
+      console.warn('🏢 LobbyWaitingScene: No lobbyData received!', data);
+    }
   }
 
   create(): void {
