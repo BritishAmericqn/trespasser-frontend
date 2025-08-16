@@ -132,7 +132,7 @@ export class LobbyMenuScene extends Phaser.Scene {
     const findMatchBg = this.add.graphics();
     findMatchBg.fillStyle(0x006600);
     findMatchBg.fillRect(-buttonWidth/2, -35 - primaryHeight/2, buttonWidth, primaryHeight);
-    this.findMatchButton = this.add.text(0, -35, '▶ INSTANT PLAY', {
+    this.findMatchButton = this.add.text(0, -35, 'PLAY', {
       fontSize: '14px',
       color: '#ffffff',
       fontFamily: 'monospace'
@@ -142,7 +142,7 @@ export class LobbyMenuScene extends Phaser.Scene {
     const privateBg = this.add.graphics();
     privateBg.fillStyle(0x444444);
     privateBg.fillRect(-buttonWidth/2, -5 - secondaryHeight/2, buttonWidth, secondaryHeight);
-    this.privateButton = this.add.text(0, -5, '🌐 SERVER BROWSER', {
+    this.privateButton = this.add.text(0, -5, 'SERVER BROWSER', {
       fontSize: '12px',
       color: '#ffffff',
       fontFamily: 'monospace'
@@ -152,7 +152,7 @@ export class LobbyMenuScene extends Phaser.Scene {
     const joinBg = this.add.graphics();
     joinBg.fillStyle(0x444444);
     joinBg.fillRect(-buttonWidth/2, 25 - secondaryHeight/2, buttonWidth, secondaryHeight);
-    this.joinLobbyButton = this.add.text(0, 25, '🔒 CREATE PRIVATE', {
+    this.joinLobbyButton = this.add.text(0, 25, 'CREATE PRIVATE', {
       fontSize: '12px',
       color: '#ffffff',
       fontFamily: 'monospace'
@@ -162,7 +162,7 @@ export class LobbyMenuScene extends Phaser.Scene {
     const joinByIdBg = this.add.graphics();
     joinByIdBg.fillStyle(0x444444);
     joinByIdBg.fillRect(-buttonWidth/2, 55 - secondaryHeight/2, buttonWidth, secondaryHeight);
-    this.joinByIdButton = this.add.text(0, 55, '🔑 JOIN BY CODE', {
+    this.joinByIdButton = this.add.text(0, 55, 'JOIN BY CODE', {
       fontSize: '12px',
       color: '#ffffff',
       fontFamily: 'monospace'
@@ -196,7 +196,7 @@ export class LobbyMenuScene extends Phaser.Scene {
     this.errorText.setDepth(3);
 
     // Back button to settings/config
-    const backButton = this.add.text(60, GAME_CONFIG.GAME_HEIGHT - 20, 'SETTINGS', {
+    const backButton = this.add.text(60, GAME_CONFIG.GAME_HEIGHT - 20, 'MENU', {
       fontSize: '10px',
       color: '#ffffff',
       backgroundColor: '#333333',

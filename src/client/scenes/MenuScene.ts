@@ -66,12 +66,26 @@ export class MenuScene extends Phaser.Scene {
     const primaryHeight = 24;
     const secondaryHeight = 20;
 
-    // 🚀 Public Match button (no password required!)
+    // Play Now button (immediate deathmatch with minimal clicks) - moved to top
+    const directButtonBg = this.add.graphics();
+    directButtonBg.fillStyle(0x006600); // Green background for immediate action
+    directButtonBg.fillRect(-buttonWidth/2, -5 - primaryHeight/2, buttonWidth, primaryHeight);
+    const playNowButton = this.add.text(0, -5, 'PLAY NOW', {
+      fontSize: '14px',
+      color: '#ffffff',
+      fontFamily: 'monospace'
+    }).setOrigin(0.5);
+
+    this.setupButton(playNowButton, '#006600', '#008800', () => {
+      this.playNowAction();
+    });
+
+    // Public Match button (no password required!) - moved to second position
     const lobbyButtonBg = this.add.graphics();
     lobbyButtonBg.fillStyle(0x006600);
-    lobbyButtonBg.fillRect(-buttonWidth/2, -5 - primaryHeight/2, buttonWidth, primaryHeight);
-    const lobbySystemButton = this.add.text(0, -5, '🚀 INSTANT PLAY', {
-      fontSize: '14px',
+    lobbyButtonBg.fillRect(-buttonWidth/2, 25 - secondaryHeight/2, buttonWidth, secondaryHeight);
+    const lobbySystemButton = this.add.text(0, 25, 'PLAY', {
+      fontSize: '12px',
       color: '#ffffff',
       fontFamily: 'monospace'
     }).setOrigin(0.5);
@@ -80,25 +94,11 @@ export class MenuScene extends Phaser.Scene {
       this.scene.start('LobbyMenuScene');
     });
 
-    // Private server connect button (fixed width rectangle)
-    const directButtonBg = this.add.graphics();
-    directButtonBg.fillStyle(0x444444);
-    directButtonBg.fillRect(-buttonWidth/2, 25 - secondaryHeight/2, buttonWidth, secondaryHeight);
-    const connectServerButton = this.add.text(0, 25, '🔒 PRIVATE SERVER', {
-      fontSize: '12px',
-      color: '#ffffff',
-      fontFamily: 'monospace'
-    }).setOrigin(0.5);
-
-    this.setupButton(connectServerButton, '#444444', '#666666', () => {
-      this.scene.start('ServerConnectionSceneText');
-    });
-
     // Configure button (fixed width rectangle)
     const configButtonBg = this.add.graphics();
     configButtonBg.fillStyle(0x333333);
     configButtonBg.fillRect(-buttonWidth/2, 50 - secondaryHeight/2, buttonWidth, secondaryHeight);
-    const configureButton = this.add.text(0, 50, '⚙ LOADOUT', {
+    const configureButton = this.add.text(0, 50, 'LOADOUT', {
       fontSize: '12px',
       color: '#ffffff',
       fontFamily: 'monospace'
@@ -112,7 +112,7 @@ export class MenuScene extends Phaser.Scene {
     const settingsButtonBg = this.add.graphics();
     settingsButtonBg.fillStyle(0x444444);
     settingsButtonBg.fillRect(-buttonWidth/2, 75 - secondaryHeight/2, buttonWidth, secondaryHeight);
-    const settingsButton = this.add.text(0, 75, '⚡ CONFIG', {
+    const settingsButton = this.add.text(0, 75, 'CONFIG', {
       fontSize: '12px',
       color: '#ffffff',
       fontFamily: 'monospace'
@@ -157,8 +157,8 @@ export class MenuScene extends Phaser.Scene {
     // Add all elements to container (background first, then border, then content)
     this.connectionContainer.add([
       menuBackground, menuBorder, title, subtitle, version,
+      directButtonBg, playNowButton,
       lobbyButtonBg, lobbySystemButton,
-      directButtonBg, connectServerButton,
       configButtonBg, configureButton,
       settingsButtonBg, settingsButton
     ]);
@@ -185,7 +185,7 @@ export class MenuScene extends Phaser.Scene {
 
     // Add all elements to container
     this.connectionContainer.add([
-      menuBorder, title, subtitle, version, lobbySystemButton, connectServerButton, configureButton, settingsButton, loadoutStatus
+      menuBorder, title, subtitle, version, playNowButton, lobbySystemButton, configureButton, settingsButton, loadoutStatus
     ]);
 
     // Instructions at bottom
@@ -1121,6 +1121,18 @@ export class MenuScene extends Phaser.Scene {
     
     // Go to configure scene for test mode
     console.log('Test mode: Going to ConfigureScene with test loadout');
+    this.scene.start('ConfigureScene');
+  }
+
+  // 🚀 PLAY NOW: Immediate deathmatch action with minimal clicks
+  private playNowAction(): void {
+    console.log('🚀 PLAY NOW: Immediate deathmatch action');
+    
+    // Set flag in registry to indicate this is a "play now" flow
+    this.game.registry.set('playNowMode', true);
+    
+    // Go directly to ConfigureScene - it will handle the immediate matchmaking
+    console.log('🚀 PLAY NOW: Going to ConfigureScene for immediate loadout and game');
     this.scene.start('ConfigureScene');
   }
 } 

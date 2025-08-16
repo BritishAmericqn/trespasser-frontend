@@ -766,7 +766,31 @@ export class ConfigureScene extends Phaser.Scene {
       return;
     }
     
-    // PRIORITY 3: Check if we came from instant play flow (need to start matchmaking)
+    // PRIORITY 3: Check if we came from Play Now mode (immediate game access)
+    const playNowMode = this.game.registry.get('playNowMode');
+    if (playNowMode) {
+      console.log('🚀 ConfigureScene: Play Now mode - finding immediate deathmatch game');
+      this.game.registry.remove('playNowMode');
+      
+      // Find an immediate deathmatch game
+      const networkSystem = NetworkSystemSingleton.getInstance(this);
+      const socket = networkSystem.getSocket();
+      if (socket) {
+        // Emit find_match for immediate deathmatch
+        console.log('🚀 Play Now: Finding deathmatch game...');
+        socket.emit('find_match', { 
+          gameMode: 'deathmatch',
+          isPrivate: false,
+          quickJoin: true  // Flag for immediate joining
+        });
+        
+        // Go to matchmaking scene with play now flag
+        this.scene.start('MatchmakingScene', { gameMode: 'deathmatch', instantPlay: true, playNow: true });
+        return;
+      }
+    }
+    
+    // PRIORITY 4: Check if we came from instant play flow (need to start matchmaking)
     const fromInstantPlay = this.game.registry.get('fromInstantPlay');
     if (fromInstantPlay) {
       console.log('🎮 ConfigureScene: Came from instant play, starting matchmaking');
@@ -788,7 +812,7 @@ export class ConfigureScene extends Phaser.Scene {
       }
     }
     
-    // PRIORITY 4: Check if connected but no specific match (should go to lobby to find/create one)
+    // PRIORITY 5: Check if connected but no specific match (should go to lobby to find/create one)
     if (typeof NetworkSystemSingleton !== 'undefined' && NetworkSystemSingleton.hasInstance()) {
       const networkSystem = NetworkSystemSingleton.getInstance(this);
       const connectionState = networkSystem.getConnectionState();

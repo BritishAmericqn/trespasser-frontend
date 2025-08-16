@@ -31,6 +31,11 @@ export class ServerBrowserScene extends Phaser.Scene {
   private filterContainer!: Phaser.GameObjects.Container;
   private statusText!: Phaser.GameObjects.Text;
   
+  // Search elements
+  private searchLabel!: Phaser.GameObjects.Text;
+  private searchInput!: Phaser.GameObjects.Text;
+  private searchClearButton!: Phaser.GameObjects.Text;
+  
   // Filter toggles
   private showPrivateToggle!: Phaser.GameObjects.Text;
   private showFullToggle!: Phaser.GameObjects.Text;
@@ -38,6 +43,8 @@ export class ServerBrowserScene extends Phaser.Scene {
   
   // State
   private lobbies: LobbyInfo[] = [];
+  private filteredLobbies: LobbyInfo[] = [];
+  private searchTerm: string = '';
   private filters = {
     showPrivate: false,
     showFull: false,
@@ -107,6 +114,9 @@ export class ServerBrowserScene extends Phaser.Scene {
       this.refreshLobbyList();
     });
 
+    // Create search bar
+    this.createSearchBar();
+
     // Create filter controls
     this.createFilterControls();
 
@@ -118,11 +128,49 @@ export class ServerBrowserScene extends Phaser.Scene {
     }).setOrigin(0.5);
 
     // Lobby list container
-    this.lobbyContainer = this.add.container(0, 120);
+    this.lobbyContainer = this.add.container(0, 140);
+  }
+
+  private createSearchBar(): void {
+    const searchY = 60;
+    const centerX = GAME_CONFIG.GAME_WIDTH / 2;
+    
+    // Search label
+    this.searchLabel = this.add.text(centerX - 200, searchY, 'SEARCH BY GAME ID:', {
+      fontSize: '10px',
+      color: '#888888',
+      fontFamily: 'monospace'
+    }).setOrigin(0, 0.5);
+
+    // Search input display (shows current search term)
+    this.searchInput = this.add.text(centerX - 80, searchY, this.searchTerm || 'Click to enter Game ID...', {
+      fontSize: '10px',
+      color: this.searchTerm ? '#ffffff' : '#666666',
+      backgroundColor: '#333333',
+      padding: { x: 8, y: 4 },
+      fontFamily: 'monospace'
+    }).setOrigin(0, 0.5);
+    
+    this.setupButton(this.searchInput, '#333333', '#444444', () => {
+      this.openSearchDialog();
+    });
+
+    // Clear search button
+    this.searchClearButton = this.add.text(centerX + 120, searchY, 'CLEAR', {
+      fontSize: '10px',
+      color: '#ffffff',
+      backgroundColor: '#666666',
+      padding: { x: 6, y: 4 },
+      fontFamily: 'monospace'
+    }).setOrigin(0, 0.5);
+    
+    this.setupButton(this.searchClearButton, '#666666', '#888888', () => {
+      this.clearSearch();
+    });
   }
 
   private createFilterControls(): void {
-    const filterY = 70;
+    const filterY = 90;
     const startX = GAME_CONFIG.GAME_WIDTH / 2 - 150;
     
     // Filter label
@@ -141,7 +189,7 @@ export class ServerBrowserScene extends Phaser.Scene {
     this.setupToggle(this.showPrivateToggle, () => {
       this.filters.showPrivate = !this.filters.showPrivate;
       this.showPrivateToggle.setText(this.getToggleText('Show Private', this.filters.showPrivate));
-      this.refreshLobbyList();
+      this.applyFilters();
     });
 
     // Show Full toggle
@@ -153,7 +201,7 @@ export class ServerBrowserScene extends Phaser.Scene {
     this.setupToggle(this.showFullToggle, () => {
       this.filters.showFull = !this.filters.showFull;
       this.showFullToggle.setText(this.getToggleText('Show Full', this.filters.showFull));
-      this.refreshLobbyList();
+      this.applyFilters();
     });
 
     // Show In Progress toggle
@@ -165,7 +213,7 @@ export class ServerBrowserScene extends Phaser.Scene {
     this.setupToggle(this.showInProgressToggle, () => {
       this.filters.showInProgress = !this.filters.showInProgress;
       this.showInProgressToggle.setText(this.getToggleText('In Progress', this.filters.showInProgress));
-      this.refreshLobbyList();
+      this.applyFilters();
     });
   }
 
@@ -181,8 +229,8 @@ export class ServerBrowserScene extends Phaser.Scene {
     socket.on('lobby_list', (data: LobbyListResponse) => {
       console.log(`📋 Received ${data.totalCount} lobbies`);
       this.lobbies = data.lobbies;
-      this.updateLobbyDisplay();
-      this.statusText.setText(`Found ${data.totalCount} lobbies`);
+      this.applyFilters();
+      this.statusText.setText(`Found ${data.totalCount} lobbies${this.searchTerm ? ` (${this.filteredLobbies.length} matching search)` : ''}`);
       this.statusText.setColor('#00aa00');
     });
 
@@ -201,6 +249,51 @@ export class ServerBrowserScene extends Phaser.Scene {
       console.log(`📝 ALL players get loadout configuration - going to LobbyWaitingScene (status: ${data.status})`);
       this.scene.start('LobbyWaitingScene', { lobbyData: data });
     });
+  }
+
+  private openSearchDialog(): void {
+    const gameId = prompt('Enter Game ID to search for:');
+    if (gameId !== null) {
+      this.searchTerm = gameId.trim();
+      this.updateSearchDisplay();
+      this.applyFilters();
+    }
+  }
+
+  private clearSearch(): void {
+    this.searchTerm = '';
+    this.updateSearchDisplay();
+    this.applyFilters();
+  }
+
+  private updateSearchDisplay(): void {
+    this.searchInput.setText(this.searchTerm || 'Click to enter Game ID...');
+    this.searchInput.setColor(this.searchTerm ? '#ffffff' : '#666666');
+  }
+
+  private applyFilters(): void {
+    this.filteredLobbies = this.lobbies.filter(lobby => {
+      // Apply search filter
+      if (this.searchTerm && !lobby.id.toLowerCase().includes(this.searchTerm.toLowerCase())) {
+        return false;
+      }
+      
+      // Apply existing filters
+      if (!this.filters.showPrivate && lobby.isPrivate) {
+        return false;
+      }
+      
+      if (!this.filters.showFull && lobby.playerCount >= lobby.maxPlayers) {
+        return false;
+      }
+      
+      if (!this.filters.showInProgress && lobby.status === 'playing') {
+        return false;
+      }
+      
+      return true;
+    });
+    this.updateLobbyDisplay();
   }
 
   private refreshLobbyList(): void {
@@ -227,20 +320,25 @@ export class ServerBrowserScene extends Phaser.Scene {
     this.lobbyCards.forEach(card => card.destroy());
     this.lobbyCards = [];
 
-    // Create a card for each lobby
-    this.lobbies.forEach((lobby, index) => {
+    // Create a card for each filtered lobby
+    this.filteredLobbies.forEach((lobby, index) => {
       const card = this.createLobbyCard(lobby, index);
       this.lobbyCards.push(card);
       this.lobbyContainer.add(card);
     });
 
     // Show message if no lobbies
-    if (this.lobbies.length === 0) {
-      const emptyText = this.add.text(GAME_CONFIG.GAME_WIDTH / 2, 50, 'No lobbies found. Try adjusting filters or create your own!', {
+    if (this.filteredLobbies.length === 0) {
+      const message = this.searchTerm 
+        ? `No lobbies found matching "${this.searchTerm}". Try a different search term or clear the search.`
+        : 'No lobbies found. Try adjusting filters or create your own!';
+        
+      const emptyText = this.add.text(GAME_CONFIG.GAME_WIDTH / 2, 50, message, {
         fontSize: '12px',
         color: '#888888',
         fontFamily: 'monospace',
-        align: 'center'
+        align: 'center',
+        wordWrap: { width: GAME_CONFIG.GAME_WIDTH - 100 }
       }).setOrigin(0.5);
       
       const emptyCard = this.add.container(0, 0);
@@ -269,15 +367,23 @@ export class ServerBrowserScene extends Phaser.Scene {
     }
 
     // Game mode and map
-    const titleText = this.add.text(-cardWidth/2 + 15, -cardHeight/2 + 10, 
+    const titleText = this.add.text(-cardWidth/2 + 15, -cardHeight/2 + 8, 
       `${lobby.gameMode.toUpperCase()} - ${lobby.mapName}`, {
       fontSize: '12px',
       color: '#ffffff',
       fontFamily: 'monospace'
     });
 
+    // Game ID
+    const gameIdText = this.add.text(-cardWidth/2 + 15, -cardHeight/2 + 22, 
+      `Game ID: ${lobby.id}`, {
+      fontSize: '9px',
+      color: '#aaaaaa',
+      fontFamily: 'monospace'
+    });
+
     // Player count
-    const playerText = this.add.text(-cardWidth/2 + 15, -cardHeight/2 + 30, 
+    const playerText = this.add.text(-cardWidth/2 + 15, -cardHeight/2 + 36, 
       `Players: ${lobby.playerCount}/${lobby.maxPlayers}`, {
       fontSize: '10px',
       color: lobby.playerCount >= lobby.maxPlayers ? '#ff4444' : '#00aa00',
@@ -317,7 +423,7 @@ export class ServerBrowserScene extends Phaser.Scene {
     }
 
     // Add all elements to container
-    container.add([bg, titleText, playerText, joinButton]);
+    container.add([bg, titleText, gameIdText, playerText, joinButton]);
     
     return container;
   }
