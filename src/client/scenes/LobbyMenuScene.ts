@@ -67,40 +67,9 @@ export class LobbyMenuScene extends Phaser.Scene {
     this.networkSystem.getSocket()?.on('lobby_joined', (data: any) => {
       console.log('🏢 Lobby joined:', data);
       
-      // Check if this is a true mid-game join (game has been running for a while)
-      const gameStartTime = data.gameStartTime;
-      const currentTime = Date.now();
-      const timeSinceStart = gameStartTime ? (currentTime - gameStartTime) / 1000 : 0;
-      
-      // VERY conservative late join detection - only skip configuration if:
-      // 1. Game has been running for more than 2 minutes (120 seconds)
-      // 2. AND we have reliable timestamp data
-      // 3. AND backend explicitly says players are actively fighting
-      const isDefinitelyMidGame = gameStartTime && 
-                                  timeSinceStart > 120 && 
-                                  data.status === 'playing' && 
-                                  data.activePlayerCount > 1;
-      
-      if (isDefinitelyMidGame) {
-        console.log(`🎮 Joining truly mid-game (started ${timeSinceStart}s ago, ${data.activePlayerCount} active players), going directly to GameScene`);
-        
-        // Stop this scene immediately
-        this.scene.stop();
-        
-        // Use direct scene start for confirmed late joins
-        this.scene.manager.start('GameScene', { 
-          matchData: {
-            lobbyId: data.lobbyId,
-            isLateJoin: true,
-            killTarget: data.killTarget || 50,
-            gameMode: data.gameMode || 'deathmatch'
-          }
-        });
-      } else {
-        // DEFAULT: Go to configuration - much safer for player experience
-        console.log(`🏢 Joining lobby for configuration (game time: ${timeSinceStart}s, status: ${data.status})`);
-        this.scene.start('LobbyWaitingScene', { lobbyData: data });
-      }
+      // ALWAYS go to loadout configuration - no exceptions!
+      console.log(`🏢 ALL players get loadout configuration - going to LobbyWaitingScene (status: ${data.status})`);
+      this.scene.start('LobbyWaitingScene', { lobbyData: data });
     });
     
     this.networkSystem.getSocket()?.on('matchmaking_failed', (data: any) => {

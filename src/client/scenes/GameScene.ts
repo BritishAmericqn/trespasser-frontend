@@ -100,27 +100,24 @@ export class GameScene extends Phaser.Scene {
       }
     }
     
-    // Get configured loadout from registry
+    // Get configured loadout from registry - should ALWAYS exist now since everyone goes through ConfigureScene
     const initialLoadout = this.game.registry.get('playerLoadout');
     this.playerLoadout = initialLoadout;
     if (!initialLoadout) {
-      // For late joins or emergency transitions, use default loadout
-      if (data?.matchData?.isLateJoin || data?.matchData?.emergency) {
-        console.warn('⚠️ Late join/emergency transition without loadout, using default');
-        const defaultLoadout = {
-          team: Math.random() > 0.5 ? 'red' : 'blue', // Random team for late joins
-          primary: 'rifle',
-          secondary: 'pistol',
-          support: ['grenade']
-        };
-        this.game.registry.set('playerLoadout', defaultLoadout);
-        this.playerLoadout = defaultLoadout;
-        console.log('📋 Using default loadout for late join:', defaultLoadout);
-      } else {
-        console.error('GameScene: No player loadout configured! Returning to ConfigureScene.');
-        SceneManager.transition(this, 'ConfigureScene');
-        return;
-      }
+      // This should never happen since everyone goes through ConfigureScene now, but safety fallback
+      console.error('GameScene: No player loadout configured! This should not happen. Using emergency default and returning to ConfigureScene.');
+      const emergencyLoadout = {
+        team: 'blue', // Default to blue team
+        primary: 'rifle',
+        secondary: 'pistol',
+        support: ['grenade']
+      };
+      this.game.registry.set('playerLoadout', emergencyLoadout);
+      this.playerLoadout = emergencyLoadout;
+      console.log('📋 Used emergency default loadout:', emergencyLoadout);
+      // Still return to configure to let them pick properly
+      SceneManager.transition(this, 'ConfigureScene');
+      return;
     }
     
     console.log('GameScene: Using configured loadout:', this.playerLoadout);

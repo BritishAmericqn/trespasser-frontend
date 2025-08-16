@@ -130,13 +130,12 @@ export class LobbyEventCoordinator {
         case 'ServerBrowserScene':
         case 'LobbyMenuScene':
         case 'MatchmakingScene':
-          // These scenes shouldn't normally receive match_started, but if they do,
-          // treat it as a late join since the match is already starting
-          console.log(`🎭 Unexpected match_started from ${sceneName} → Direct GameScene (late join)`);
-          SceneManager.transition(this.currentScene, 'GameScene', {
+          // ALWAYS go to ConfigureScene first - no exceptions!
+          console.log(`🎭 Match started from ${sceneName} → ConfigureScene (universal loadout access)`);
+          SceneManager.transition(this.currentScene, 'ConfigureScene', {
             matchData: {
               ...matchData,
-              isLateJoin: true
+              isLateJoin: false  // Everyone gets configuration
             }
           });
           break;
@@ -149,11 +148,12 @@ export class LobbyEventCoordinator {
           
         default:
           console.warn(`🎭 Unhandled match_started from scene: ${sceneName}`);
-          // Fallback to late join
-          SceneManager.transition(this.currentScene, 'GameScene', {
+          // ALWAYS go to ConfigureScene - universal loadout access
+          console.log(`🎭 Fallback route for ${sceneName} → ConfigureScene (universal loadout access)`);
+          SceneManager.transition(this.currentScene, 'ConfigureScene', {
             matchData: {
               ...matchData,
-              isLateJoin: true
+              isLateJoin: false  // Everyone gets configuration
             }
           });
       }

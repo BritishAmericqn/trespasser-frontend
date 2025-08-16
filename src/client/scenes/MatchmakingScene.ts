@@ -88,36 +88,12 @@ export class MatchmakingScene extends Phaser.Scene {
       this.playerCount = data.playerCount || 1;
       this.maxPlayers = data.maxPlayers || 8;
       
-      // Check if this is a true mid-game join (game has been running for a while)
-      const gameStartTime = data.gameStartTime;
-      const currentTime = Date.now();
-      const timeSinceStart = gameStartTime ? (currentTime - gameStartTime) / 1000 : 0;
-      
-      // VERY conservative late join detection - only skip configuration if:
-      // 1. Game has been running for more than 2 minutes (120 seconds)
-      // 2. AND we have reliable timestamp data
-      // 3. AND backend explicitly says players are actively fighting
-      const isDefinitelyMidGame = gameStartTime && 
-                                  timeSinceStart > 120 && 
-                                  data.status === 'playing' && 
-                                  data.activePlayerCount > 1;
-      
-      if (isDefinitelyMidGame) {
-        console.log(`🎮 Joining truly mid-game (started ${timeSinceStart}s ago, ${data.activePlayerCount} active players), going directly to GameScene`);
+      // Check if this is instant play mode or normal matchmaking
+      if (!this.instantPlay) {
+        // ALWAYS go to loadout configuration for normal matchmaking - no exceptions!
+        console.log(`📝 ALL players get loadout configuration - going to LobbyWaitingScene (status: ${data.status})`);
         this.stopLoadingAnimation();
-        
-        // Stop this scene immediately
-        this.scene.stop();
-        
-        // Use direct scene start for confirmed late joins
-        this.scene.manager.start('GameScene', { 
-          matchData: {
-            lobbyId: data.lobbyId,
-            isLateJoin: true,
-            killTarget: data.killTarget || 50,
-            gameMode: data.gameMode || 'deathmatch'
-          }
-        });
+        this.scene.start('LobbyWaitingScene', { lobbyData: data });
         return;
       }
       
@@ -135,8 +111,9 @@ export class MatchmakingScene extends Phaser.Scene {
           this.statusText.setColor('#00ff00');
         }
       } else {
-        // DEFAULT: Go to configuration - normal matchmaking flow
-        console.log(`📝 Matchmaking: going to configuration (game time: ${timeSinceStart}s, status: ${data.status})`);
+        // For instant play that somehow missed the condition above
+        // ALWAYS go to loadout configuration - no exceptions!
+        console.log(`📝 Instant play fallback: ALL players get loadout configuration`);
         this.stopLoadingAnimation();
         this.scene.start('LobbyWaitingScene', { lobbyData: data });
       }
