@@ -93,15 +93,23 @@ export class MatchmakingScene extends Phaser.Scene {
       const currentTime = Date.now();
       const timeSinceStart = gameStartTime ? (currentTime - gameStartTime) / 1000 : 0;
       
-      // Only skip configuration if game has been actively running for more than 30 seconds
-      if ((data.status === 'playing' || data.isInProgress) && timeSinceStart > 30) {
-        console.log(`🎮 Joining mid-game (started ${timeSinceStart}s ago), going directly to GameScene`);
+      // VERY conservative late join detection - only skip configuration if:
+      // 1. Game has been running for more than 2 minutes (120 seconds)
+      // 2. AND we have reliable timestamp data
+      // 3. AND backend explicitly says players are actively fighting
+      const isDefinitelyMidGame = gameStartTime && 
+                                  timeSinceStart > 120 && 
+                                  data.status === 'playing' && 
+                                  data.activePlayerCount > 1;
+      
+      if (isDefinitelyMidGame) {
+        console.log(`🎮 Joining truly mid-game (started ${timeSinceStart}s ago, ${data.activePlayerCount} active players), going directly to GameScene`);
         this.stopLoadingAnimation();
         
         // Stop this scene immediately
         this.scene.stop();
         
-        // Use direct scene start for true late joins
+        // Use direct scene start for confirmed late joins
         this.scene.manager.start('GameScene', { 
           matchData: {
             lobbyId: data.lobbyId,
@@ -127,7 +135,8 @@ export class MatchmakingScene extends Phaser.Scene {
           this.statusText.setColor('#00ff00');
         }
       } else {
-        // Normal flow - go to lobby waiting scene
+        // DEFAULT: Go to configuration - normal matchmaking flow
+        console.log(`📝 Matchmaking: going to configuration (game time: ${timeSinceStart}s, status: ${data.status})`);
         this.stopLoadingAnimation();
         this.scene.start('LobbyWaitingScene', { lobbyData: data });
       }

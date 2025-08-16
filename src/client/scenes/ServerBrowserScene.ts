@@ -202,14 +202,22 @@ export class ServerBrowserScene extends Phaser.Scene {
       const currentTime = Date.now();
       const timeSinceStart = gameStartTime ? (currentTime - gameStartTime) / 1000 : 0;
       
-      // Only skip configuration if game has been actively running for more than 30 seconds
-      if ((data.status === 'playing' || data.isInProgress) && timeSinceStart > 30) {
-        console.log(`🎮 Joining mid-game (started ${timeSinceStart}s ago), going directly to GameScene`);
+      // VERY conservative late join detection - only skip configuration if:
+      // 1. Game has been running for more than 2 minutes (120 seconds)
+      // 2. AND we have reliable timestamp data
+      // 3. AND backend explicitly says players are actively fighting
+      const isDefinitelyMidGame = gameStartTime && 
+                                  timeSinceStart > 120 && 
+                                  data.status === 'playing' && 
+                                  data.activePlayerCount > 1;
+      
+      if (isDefinitelyMidGame) {
+        console.log(`🎮 Joining truly mid-game (started ${timeSinceStart}s ago, ${data.activePlayerCount} active players), going directly to GameScene`);
         
         // Stop this scene immediately and go to game
         this.scene.stop();
         
-        // Use direct scene start for true late joins
+        // Use direct scene start for confirmed late joins
         this.scene.manager.start('GameScene', { 
           matchData: {
             lobbyId: data.lobbyId,
@@ -219,8 +227,8 @@ export class ServerBrowserScene extends Phaser.Scene {
           }
         });
       } else {
-        // For new matches or recent starts, go to configuration
-        console.log(`📝 Joining lobby for configuration (game time: ${timeSinceStart}s)`);
+        // DEFAULT: Go to configuration - much safer for player experience
+        console.log(`📝 Joining lobby for configuration (game time: ${timeSinceStart}s, status: ${data.status})`);
         this.scene.start('LobbyWaitingScene', { lobbyData: data });
       }
     });
