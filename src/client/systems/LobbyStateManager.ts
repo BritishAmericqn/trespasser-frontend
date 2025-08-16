@@ -32,7 +32,7 @@ export interface LobbyState {
 type LobbyStateListener = (state: LobbyState | null) => void;
 
 export class LobbyStateManager {
-  private static instance: LobbyStateManager;
+  private static instance: LobbyStateManager | null;
   private currentLobby: LobbyState | null = null;
   private listeners: Set<LobbyStateListener> = new Set();
   private socket: any = null;

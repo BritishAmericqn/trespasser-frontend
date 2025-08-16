@@ -2,6 +2,8 @@ import { InputSystem } from '../systems/InputSystem';
 import { NetworkSystem } from '../systems/NetworkSystem';
 import NetworkSystemSingleton from '../systems/NetworkSystemSingleton';
 import { VisualEffectsSystem } from '../systems/VisualEffectsSystem';
+import { SceneManager } from '../utils/SceneManager';
+import { SceneDebugger } from '../systems/SceneDebugger';
 import { DestructionRenderer } from '../systems/DestructionRenderer';
 import { WeaponUI } from '../ui/WeaponUI';
 import { ClientPrediction } from '../systems/ClientPrediction';
@@ -18,6 +20,7 @@ import { audioTest } from '../systems/AudioTest';
 import { NotificationSystem } from '../systems/NotificationSystem';
 import { RestartSystem } from '../systems/RestartSystem';
 import { PerformanceMonitor } from '../systems/PerformanceMonitor';
+import { LobbyStateManager } from '../systems/LobbyStateManager';
 
 export class GameScene extends Phaser.Scene {
   private inputSystem!: InputSystem;
@@ -33,6 +36,7 @@ export class GameScene extends Phaser.Scene {
   private notificationSystem!: NotificationSystem;
   private restartSystem!: RestartSystem;
   private performanceMonitor!: PerformanceMonitor;
+  private sceneDebugger!: SceneDebugger;
   private playerSprite!: Phaser.GameObjects.Sprite; // Changed from Rectangle to Sprite
   private playerWeapon!: Phaser.GameObjects.Sprite; // Add weapon sprite
   // Smoke and flashbang systems
@@ -76,7 +80,8 @@ export class GameScene extends Phaser.Scene {
 
   constructor() {
     super({ key: 'GameScene' });
-    this.playerPosition = { x: 240, y: 135 }; // Center of 480x270
+    // Player position will be set based on spawn point or late join position
+    this.playerPosition = { x: 240, y: 135 }; // Default center position
   }
 
   init(data: any): void {
@@ -99,19 +104,21 @@ export class GameScene extends Phaser.Scene {
     const initialLoadout = this.game.registry.get('playerLoadout');
     this.playerLoadout = initialLoadout;
     if (!initialLoadout) {
-      // If emergency transition, use default loadout
-      if (data?.matchData?.emergency) {
-        console.warn('⚠️ Emergency transition without loadout, using default');
+      // For late joins or emergency transitions, use default loadout
+      if (data?.matchData?.isLateJoin || data?.matchData?.emergency) {
+        console.warn('⚠️ Late join/emergency transition without loadout, using default');
         const defaultLoadout = {
-          team: 'red',
-          primaryWeapon: 'rifle',
-          secondaryWeapon: 'pistol'
+          team: Math.random() > 0.5 ? 'red' : 'blue', // Random team for late joins
+          primary: 'rifle',
+          secondary: 'pistol',
+          support: ['grenade']
         };
         this.game.registry.set('playerLoadout', defaultLoadout);
+        this.playerLoadout = defaultLoadout;
+        console.log('📋 Using default loadout for late join:', defaultLoadout);
       } else {
         console.error('GameScene: No player loadout configured! Returning to ConfigureScene.');
-        this.scene.stop('GameScene');  // Stop this scene to trigger cleanup
-        this.scene.start('ConfigureScene');
+        SceneManager.transition(this, 'ConfigureScene');
         return;
       }
     }
@@ -121,11 +128,10 @@ export class GameScene extends Phaser.Scene {
 
   create(): void {
     // Clean up LobbyStateManager to prevent interference
-    if ((window as any).LobbyStateManagerInstance) {
-      console.log('🧹 Cleaning up LobbyStateManager');
-      const manager = (window as any).LobbyStateManagerInstance;
-      manager.destroy();
-      delete (window as any).LobbyStateManagerInstance;
+    const lobbyStateManager = LobbyStateManager.getInstance();
+    if (lobbyStateManager) {
+      console.log('🧹 Cleaning up LobbyStateManager in GameScene');
+      lobbyStateManager.destroy();
     }
     
     console.log('🎮 GameScene starting');
@@ -159,6 +165,12 @@ export class GameScene extends Phaser.Scene {
     if (configuredLoadout) {
       this.inputSystem.setLoadout(configuredLoadout);
       this.playerLoadout = configuredLoadout; // Store for later use
+    } else if (this.playerLoadout) {
+      // For late joins that created a default loadout in init()
+      console.log('📋 Setting default loadout for InputSystem');
+      this.inputSystem.setLoadout(this.playerLoadout);
+    } else {
+      console.error('⚠️ No loadout available for InputSystem!');
     }
     
     // Get NetworkSystem singleton (will update scene reference)
@@ -180,6 +192,31 @@ export class GameScene extends Phaser.Scene {
     this.restartSystem = new RestartSystem(this, this.notificationSystem);
     this.performanceMonitor = new PerformanceMonitor(this);
     
+    // Initialize scene debugger (helps diagnose multiple scene issues)
+    this.sceneDebugger = new SceneDebugger(this);
+    if (this.game.config.physics?.arcade?.debug) {
+      this.sceneDebugger.enable();
+    }
+    
+    // Force cleanup any lingering scenes (fixes multiple scene issues)
+    this.sceneDebugger.forceCleanup();
+    
+    // For late joins, ensure robust activation
+    if (this.matchData?.isLateJoin) {
+      console.log('🎮 Setting up robust late join activation');
+      
+      // Force scene to be fully active
+      this.scene.setActive(true);
+      this.scene.setVisible(true);
+      
+      // Ensure update loop is running
+      this.events.on('postupdate', () => {
+        // This ensures the scene is actively updating
+      });
+      
+      console.log('✅ Late join scene fully activated');
+    }
+    
     // Connect VisionRenderer to PlayerManager for partial visibility
     this.playerManager.setVisionRenderer(this.visionRenderer);
     
@@ -192,24 +229,52 @@ export class GameScene extends Phaser.Scene {
     // Set up audio event listeners
     this.setupAudioListeners();
     
-    // Create local player sprite with configured loadout
-    const teamColor = this.playerLoadout?.team || 'blue'; // Fallback to blue if no team configured
+    // Check if this is a late join - if so, use simplified setup
+    const isLateJoin = this.matchData?.isLateJoin || false;
     
-    // Debug log to verify team assignment
-    console.log(`🎨 Creating local player with team: ${teamColor} (from loadout: ${this.playerLoadout?.team})`);
-    
-    this.playerSprite = this.assetManager.createPlayer(
-      this.playerPosition.x,
-      this.playerPosition.y,
-      teamColor
-    );
-    this.playerSprite.setDepth(21); // Above other players
-    this.playerSprite.setRotation(Math.PI / 2); // Start with 90-degree clockwise rotation
-    this.playerSprite.setVisible(true); // Ensure player is visible
-    this.playerSprite.setAlpha(1); // Ensure player is fully opaque
+    if (isLateJoin) {
+      console.log('🎮 Late join detected - using simplified setup', {
+        matchData: this.matchData,
+        team: this.playerLoadout?.team || 'blue'
+      });
+      
+      // For late joins, create player at fallback position immediately
+      const teamColor = this.playerLoadout?.team || 'blue';
+      const fallbackPosition = teamColor === 'red' ? { x: 420, y: 50 } : { x: 60, y: 220 };
+      
+      this.playerSprite = this.assetManager.createPlayer(
+        fallbackPosition.x, 
+        fallbackPosition.y, 
+        teamColor
+      );
+      this.playerSprite.setDepth(21);
+      this.playerSprite.setVisible(true); // Start visible for late joins
+      this.playerSprite.setAlpha(1);
+      
+      // Update internal position
+      this.playerPosition = fallbackPosition;
+      console.log('✅ Late join: Created player at fallback position:', fallbackPosition);
+
+    } else {
+      // Normal spawn - create at default position
+      const teamColor = this.playerLoadout?.team || 'blue'; // Fallback to blue if no team configured
+      
+      // Debug log to verify team assignment
+      console.log(`🎨 Creating local player with team: ${teamColor} (from loadout: ${this.playerLoadout?.team})`);
+      
+      this.playerSprite = this.assetManager.createPlayer(
+        this.playerPosition.x,
+        this.playerPosition.y,
+        teamColor
+      );
+      this.playerSprite.setDepth(21); // Above other players
+      this.playerSprite.setRotation(Math.PI / 2); // Start with 90-degree clockwise rotation
+      this.playerSprite.setVisible(true); // Ensure player is visible
+      this.playerSprite.setAlpha(1); // Ensure player is fully opaque
+    }
     console.log('👤 Player sprite created:', {
       position: this.playerPosition,
-      team: teamColor,
+      team: this.playerLoadout?.team || 'blue',
       visible: this.playerSprite.visible,
       alpha: this.playerSprite.alpha
     });
@@ -329,8 +394,7 @@ export class GameScene extends Phaser.Scene {
         });
         
         // Redirect to lobby menu
-        this.scene.stop('GameScene');  // Explicitly stop this scene
-        this.scene.start('LobbyMenuScene');
+        SceneManager.transition(this, 'LobbyMenuScene');
         return; // Stop initialization
       } else {
         console.error('❌ Already redirected once, preventing infinite loop');
@@ -384,8 +448,7 @@ export class GameScene extends Phaser.Scene {
     
     // Add ESC key to leave game
     this.input.keyboard?.on('keydown-ESC', () => {
-      this.scene.stop('GameScene');
-      this.scene.start('LobbyMenuScene');
+      SceneManager.transition(this, 'LobbyMenuScene');
     });
     
     // Development: Add test mode button (only for development)
@@ -418,13 +481,43 @@ export class GameScene extends Phaser.Scene {
       network: !!this.networkSystem
     });
     
+    // Request game state immediately for late joins
+    if (this.matchData?.isLateJoin) {
+      const socket = this.networkSystem.getSocket();
+      if (socket && socket.connected) {
+        console.log('📡 Late join: Requesting immediate game state');
+        socket.emit('request_game_state', {});
+      }
+    }
+    
     // Check for pending game state AFTER all systems are initialized
     const pendingGameState = this.game.registry.get('pendingGameState');
     if (pendingGameState) {
       console.log('📦 Found pending game state, processing after init...');
       this.game.registry.remove('pendingGameState');
-      // Process it immediately now that everything is ready
-      this.events.emit('network:gameState', pendingGameState);
+      // Process it immediately for late joins
+      this.time.delayedCall(100, () => {
+        console.log('⏰ Processing delayed game state now');
+        this.events.emit('network:gameState', pendingGameState);
+      });
+    }
+    
+    // For late joins, also listen for the initial game state
+    if (this.matchData?.isLateJoin) {
+      // Set up a one-time handler for game state that makes us visible
+      const gameStateHandler = (gameState: any) => {
+        console.log('📦 Received initial game state for late join');
+        this.events.off('network:gameState', gameStateHandler);
+        
+        // Ensure we become visible immediately
+        if (this.playerSprite && !this.playerSprite.visible) {
+          console.log('👁️ Making late join player visible');
+          this.playerSprite.setVisible(true);
+          this.playerSprite.setAlpha(1);
+        }
+      };
+      
+      this.events.once('network:gameState', gameStateHandler);
     }
     
     // Send player:join to backend now that scene is ready
@@ -435,6 +528,17 @@ export class GameScene extends Phaser.Scene {
         loadout: finalLoadout,
         timestamp: Date.now()
       });
+      
+      // For late joins, request spawn position now that scene is ready
+      if (this.matchData?.isLateJoin && !this.playerSprite.visible) {
+        const socket = this.networkSystem.getSocket();
+        if (socket && socket.connected) {
+          console.log('📡 Requesting spawn position for late join (scene ready)');
+          socket.emit('request_spawn_position', {
+            team: this.playerLoadout?.team || 'blue'
+          });
+        }
+      }
     }
   }
 
@@ -865,6 +969,28 @@ export class GameScene extends Phaser.Scene {
       }
     });
 
+    // Handle spawn position for late joins
+    const socket = this.networkSystem.getSocket();
+    if (socket) {
+      socket.on('spawn_position', (data: any) => {
+        console.log('📍 Received spawn position from backend:', data);
+        if (data.position) {
+          this.playerPosition = { x: data.position.x, y: data.position.y };
+          
+          // Update player sprite position and make visible
+          if (this.playerSprite) {
+            this.playerSprite.setPosition(this.playerPosition.x, this.playerPosition.y);
+            this.playerSprite.setVisible(true);
+            this.playerSprite.setAlpha(1);
+            console.log('✅ Player moved to spawn position:', this.playerPosition);
+          }
+          
+          // Update client prediction with new position
+          // Client prediction will use the updated playerPosition on next update
+        }
+      });
+    }
+    
     // Game state updates from server
     this.events.on('network:gameState', (gameState: GameState) => {
       this.lastGameStateTime = Date.now();
@@ -884,6 +1010,69 @@ export class GameScene extends Phaser.Scene {
       const myPlayerId = this.networkSystem.getSocket()?.id;
       if (myPlayerId) {
         this.playerManager.setLocalPlayerId(myPlayerId);
+        
+        // For late joins, check if we have our position in the game state
+        if (this.matchData?.isLateJoin && !this.playerSprite.visible) {
+          try {
+            // Try to find our position in the game state
+            let myPosition = null;
+            
+            // Check in visible players (handle both array and object formats)
+            if (gameState.visiblePlayers) {
+              // Check if it's an array
+              if (Array.isArray(gameState.visiblePlayers)) {
+                const myPlayer = gameState.visiblePlayers.find((p: any) => p.id === myPlayerId);
+                if (myPlayer && myPlayer.position) {
+                  myPosition = myPlayer.position;
+                }
+              } 
+              // Check if it's an object/map
+              else if (typeof gameState.visiblePlayers === 'object') {
+                const myPlayer = (gameState.visiblePlayers as any)[myPlayerId];
+                if (myPlayer && myPlayer.position) {
+                  myPosition = myPlayer.position;
+                }
+              }
+            }
+            
+            // Check in all players if not found
+            if (!myPosition && gameState.players) {
+              const allPlayers = gameState.players instanceof Map ? 
+                gameState.players.get(myPlayerId) : 
+                gameState.players[myPlayerId];
+              if (allPlayers && allPlayers.position) {
+                myPosition = allPlayers.position;
+              }
+            }
+            
+            // If we found our position, update and make visible
+            if (myPosition) {
+              console.log('📍 Found spawn position in game state:', myPosition);
+              this.playerPosition = { x: myPosition.x, y: myPosition.y };
+              
+              // Update player sprite position and make visible
+              if (this.playerSprite) {
+                this.playerSprite.setPosition(this.playerPosition.x, this.playerPosition.y);
+                this.playerSprite.setVisible(true);
+                this.playerSprite.setAlpha(1);
+                console.log('✅ Late join: Player moved to position from game state:', this.playerPosition);
+              }
+              
+              // Client prediction will use the updated playerPosition on next update
+            } else {
+              console.log('⚠️ Late join: Could not find player position in game state', {
+                myPlayerId,
+                hasVisiblePlayers: !!gameState.visiblePlayers,
+                visiblePlayersType: Array.isArray(gameState.visiblePlayers) ? 'array' : typeof gameState.visiblePlayers,
+                hasPlayers: !!gameState.players,
+                playersType: gameState.players instanceof Map ? 'Map' : typeof gameState.players
+              });
+            }
+          } catch (error) {
+            console.error('❌ Error processing late join position:', error);
+            // Will use fallback spawn position
+          }
+        }
       }
       
 
@@ -1725,8 +1914,12 @@ export class GameScene extends Phaser.Scene {
   shutdown(): void {
     // Clean up socket listeners
     const socket = this.networkSystem?.getSocket();
-    if (socket && (this as any).matchEndedHandler) {
-      socket.off('match_ended', (this as any).matchEndedHandler);
+    if (socket) {
+      if ((this as any).matchEndedHandler) {
+        socket.off('match_ended', (this as any).matchEndedHandler);
+      }
+      // Clean up spawn position listener
+      socket.off('spawn_position');
     }
     
     // Clean up event listeners first
@@ -1891,8 +2084,7 @@ export class GameScene extends Phaser.Scene {
     // Store the handler so we can remove it later
     (this as any).matchEndedHandler = (data: any) => {
       console.log('🏁 Match ended:', data);
-      this.scene.stop('GameScene');  // Stop this scene to trigger cleanup
-      this.scene.start('MatchResultsScene', { matchResults: data });
+      SceneManager.transition(this, 'MatchResultsScene', { matchResults: data });
     };
     
     socket.on('match_ended', (this as any).matchEndedHandler);

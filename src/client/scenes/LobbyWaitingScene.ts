@@ -2,6 +2,8 @@ import { GAME_CONFIG } from '../../../shared/constants/index';
 import { NetworkSystem } from '../systems/NetworkSystem';
 import NetworkSystemSingleton from '../systems/NetworkSystemSingleton';
 import { LobbyStateManager, LobbyState } from '../systems/LobbyStateManager';
+import { SceneManager } from '../utils/SceneManager';
+import { SceneDebugger } from '../systems/SceneDebugger';
 import { DebugOverlay } from '../ui/DebugOverlay';
 
 interface LobbyData {
@@ -10,6 +12,9 @@ interface LobbyData {
   maxPlayers: number;
   gameMode: string;
   inviteCode?: string;
+  status?: 'waiting' | 'playing' | 'finished';
+  isInProgress?: boolean;
+  killTarget?: number;
 }
 
 export class LobbyWaitingScene extends Phaser.Scene {
@@ -33,7 +38,7 @@ export class LobbyWaitingScene extends Phaser.Scene {
   private countdownTimer!: Phaser.Time.TimerEvent;
   
   // State management
-  private lobbyStateManager!: LobbyStateManager;
+  private lobbyStateManager?: LobbyStateManager;
   private stateUnsubscribe?: () => void;
 
   constructor() {
@@ -50,6 +55,10 @@ export class LobbyWaitingScene extends Phaser.Scene {
     this.add.rectangle(0, 0, GAME_CONFIG.GAME_WIDTH, GAME_CONFIG.GAME_HEIGHT, 0x111111)
       .setOrigin(0, 0);
 
+    // Force cleanup any conflicting scenes (prevents multiple scene issues)
+    const sceneDebugger = new SceneDebugger(this);
+    sceneDebugger.forceCleanup();
+
     // Get NetworkSystem singleton
     this.networkSystem = NetworkSystemSingleton.getInstance(this);
     
@@ -64,6 +73,20 @@ export class LobbyWaitingScene extends Phaser.Scene {
     this.stateUnsubscribe = this.lobbyStateManager.subscribe((state) => {
       this.handleLobbyStateChange(state);
     });
+    
+    // Check if the lobby is already playing - if so, go directly to game
+    if (this.lobbyData.status === 'playing' || this.lobbyData.isInProgress) {
+      console.log('🎮 Lobby is already playing, transitioning directly to GameScene');
+      SceneManager.transition(this, 'GameScene', { 
+        matchData: {
+          lobbyId: this.lobbyData.lobbyId,
+          isLateJoin: true,
+          killTarget: this.lobbyData.killTarget || 50,
+          gameMode: this.lobbyData.gameMode || 'deathmatch'
+        }
+      });
+      return; // Don't setup the waiting room
+    }
     
     // Setup network event listeners
     this.setupNetworkListeners();
@@ -106,12 +129,29 @@ export class LobbyWaitingScene extends Phaser.Scene {
       this.startCountdown();
     });
 
-    // Match started - go to game
+    // Match started - go to game (only if scene is still active)
     socket.on('match_started', (data: any) => {
-      console.log('🚀 Match started:', data);
+      if (!this.scene.isActive()) {
+        console.log('🚀 Match started but LobbyWaitingScene not active, ignoring');
+        return;
+      }
+      
+      console.log('🚀 Match started (LobbyWaitingScene):', data);
       this.stopCountdown();
-      this.scene.stop('LobbyWaitingScene');
-      this.scene.start('GameScene', { matchData: data });
+      
+      // Cleanup LobbyStateManager to prevent duplicate events
+      if (this.lobbyStateManager) {
+        this.lobbyStateManager.destroy();
+        this.lobbyStateManager = undefined;
+      }
+      
+      // Remove all listeners to prevent conflicts
+      socket.off('match_started');
+      socket.off('match_starting');
+      socket.off('lobby_joined');
+      socket.off('player_left_lobby');
+      
+      SceneManager.transition(this, 'GameScene', { matchData: data });
     });
     
     // Don't listen for game:state here - NetworkSystem handles it
@@ -119,13 +159,13 @@ export class LobbyWaitingScene extends Phaser.Scene {
     // Handle disconnection
     socket.on('disconnect', () => {
       console.log('❌ Disconnected from lobby');
-      this.scene.start('LobbyMenuScene');
+      SceneManager.transition(this, 'LobbyMenuScene');
     });
 
     // Error handling
     socket.on('lobby_error', (data: any) => {
       console.error('🚨 Lobby error:', data);
-      this.scene.start('LobbyMenuScene');
+      SceneManager.transition(this, 'LobbyMenuScene');
     });
   }
 
@@ -199,18 +239,47 @@ export class LobbyWaitingScene extends Phaser.Scene {
 
     // Private lobby invite code (if applicable)
     if (this.isPrivate && this.lobbyData.inviteCode) {
-      this.inviteCodeText = this.add.text(GAME_CONFIG.GAME_WIDTH / 2, GAME_CONFIG.GAME_HEIGHT / 2 + 80, 
-        `Share this code with friends: ${this.lobbyData.inviteCode}`, {
-        fontSize: '9px',
-        color: '#00aa00',
-        backgroundColor: '#003300',
-        padding: { x: 10, y: 4 },
+      // "INVITE CODE" label
+      const inviteLabel = this.add.text(GAME_CONFIG.GAME_WIDTH / 2, GAME_CONFIG.GAME_HEIGHT / 2 - 30, 
+        'INVITE CODE', {
+        fontSize: '10px',
+        color: '#888888',
         fontFamily: 'monospace'
+      }).setOrigin(0.5);
+      
+      // Large, prominent invite code display
+      this.inviteCodeText = this.add.text(GAME_CONFIG.GAME_WIDTH / 2, GAME_CONFIG.GAME_HEIGHT / 2 - 10, 
+        this.lobbyData.inviteCode, {
+        fontSize: '16px',
+        color: '#00ff00',
+        backgroundColor: '#004400',
+        padding: { x: 15, y: 8 },
+        fontFamily: 'monospace'
+      }).setOrigin(0.5);
+      
+      // "Click to copy" hint
+      const copyHint = this.add.text(GAME_CONFIG.GAME_WIDTH / 2, GAME_CONFIG.GAME_HEIGHT / 2 + 15, 
+        '[CLICK TO COPY]', {
+        fontSize: '9px',
+        color: '#ffff00',
+        fontFamily: 'monospace'
+      }).setOrigin(0.5);
+      
+      // Instructions for friends
+      const instructions = this.add.text(GAME_CONFIG.GAME_WIDTH / 2, GAME_CONFIG.GAME_HEIGHT / 2 + 45, 
+        'Friends can join using "JOIN BY CODE" button', {
+        fontSize: '8px',
+        color: '#888888',
+        fontFamily: 'monospace',
+        align: 'center'
       }).setOrigin(0.5);
       
       // Make invite code interactive for copying
       this.inviteCodeText.setInteractive({ useHandCursor: true });
       this.setupCopyInteraction(this.inviteCodeText, this.lobbyData.inviteCode, 'Invite Code');
+      
+      // Add all to lobby container
+      this.lobbyContainer.add([inviteLabel, this.inviteCodeText, copyHint, instructions]);
     }
     
     // Create copy notification (hidden initially)
@@ -237,18 +306,8 @@ export class LobbyWaitingScene extends Phaser.Scene {
       buttonHeight
     );
     
-    // 🧪 TEST START BUTTON (for development/testing)
-    const testStartButton = this.add.text(GAME_CONFIG.GAME_WIDTH / 2 - 80, GAME_CONFIG.GAME_HEIGHT - 30, '🧪 TEST START', {
-      fontSize: '10px',
-      color: '#ffffff',
-      backgroundColor: '#ff6600',
-      padding: { x: 10, y: 4 },
-      fontFamily: 'monospace'
-    }).setOrigin(0.5);
-
-    this.setupButton(testStartButton, '#ff6600', '#ff8833', () => this.testStartMatch());
-
-    this.leaveLobbyButton = this.add.text(GAME_CONFIG.GAME_WIDTH / 2 + 80, GAME_CONFIG.GAME_HEIGHT - 30, 'LEAVE', {
+    // Leave lobby button - centered since we removed TEST START
+    this.leaveLobbyButton = this.add.text(GAME_CONFIG.GAME_WIDTH / 2, GAME_CONFIG.GAME_HEIGHT - 30, 'LEAVE LOBBY', {
       fontSize: '12px',
       color: '#ffffff',
       fontFamily: 'monospace'
@@ -258,7 +317,7 @@ export class LobbyWaitingScene extends Phaser.Scene {
 
     // Tips section (match your style)
     const tipsText = this.add.text(GAME_CONFIG.GAME_WIDTH / 2, GAME_CONFIG.GAME_HEIGHT - 10, 
-      'Match starts automatically when enough players join • First to 50 kills wins', {
+      'Match starts automatically with 2+ players • First to 50 kills wins', {
       fontSize: '8px',
       color: '#666666',
       align: 'center',
@@ -558,12 +617,14 @@ export class LobbyWaitingScene extends Phaser.Scene {
           // The backend should have sent match_started, but as a fallback...
           if (this.scene.isActive('LobbyWaitingScene')) {
             console.log('⚠️ Forcing transition to GameScene (fallback)');
-            this.scene.stop('LobbyWaitingScene');
-            this.scene.start('GameScene', { 
+            SceneManager.transition(this, 'GameScene', { 
               matchData: { 
                 lobbyId: this.lobbyData.lobbyId,
                 gameMode: this.lobbyData.gameMode,
-                fromCountdown: true 
+                fromCountdown: true,
+                killTarget: 50,
+                isLateJoin: false,
+                mapData: { width: 480, height: 270 }
               }
             });
           }
@@ -608,28 +669,10 @@ export class LobbyWaitingScene extends Phaser.Scene {
     }
     
     this.stopCountdown();
-    this.scene.start('LobbyMenuScene');
+    SceneManager.transition(this, 'LobbyMenuScene');
   }
 
-  // 🧪 TEST START MATCH (for development/testing)
-  private testStartMatch(): void {
-    console.log('🧪 TEST: Force starting match...');
-    
-    const socket = this.networkSystem.getSocket();
-    if (socket) {
-      // Emit test start event to backend
-      socket.emit('admin:force_start_match', { 
-        lobbyId: this.lobbyData.lobbyId,
-        reason: 'test_button_pressed'
-      });
-      
-      // Show feedback to user
-      this.statusText.setText('🧪 Test start requested...');
-      this.statusText.setColor('#ff6600');
-    } else {
-      console.error('❌ No socket connection for test start');
-    }
-  }
+
 
   shutdown(): void {
     this.stopCountdown();
@@ -638,6 +681,13 @@ export class LobbyWaitingScene extends Phaser.Scene {
     if (this.stateUnsubscribe) {
       this.stateUnsubscribe();
       this.stateUnsubscribe = undefined;
+    }
+    
+    // Clean up LobbyStateManager to prevent duplicate events
+    if (this.lobbyStateManager) {
+      console.log('🧹 Destroying LobbyStateManager in shutdown');
+      this.lobbyStateManager.destroy();
+      this.lobbyStateManager = undefined;
     }
     
     // Clean up debug overlay

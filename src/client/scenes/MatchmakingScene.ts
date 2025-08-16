@@ -88,6 +88,26 @@ export class MatchmakingScene extends Phaser.Scene {
       this.playerCount = data.playerCount || 1;
       this.maxPlayers = data.maxPlayers || 8;
       
+      // Check if the lobby is already playing
+      if (data.status === 'playing' || data.isInProgress) {
+        console.log('🎮 Joining game in progress, going directly to GameScene');
+        this.stopLoadingAnimation();
+        
+        // Stop this scene immediately
+        this.scene.stop();
+        
+        // Use direct scene start for late joins
+        this.scene.manager.start('GameScene', { 
+          matchData: {
+            lobbyId: data.lobbyId,
+            isLateJoin: true,
+            killTarget: data.killTarget || 50,
+            gameMode: data.gameMode || 'deathmatch'
+          }
+        });
+        return;
+      }
+      
       if (this.instantPlay) {
         // Update player count display for instant play
         this.updatePlayerCount();

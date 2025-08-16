@@ -30,8 +30,8 @@ export class VisionRenderer {
     this.visionGraphics.setDepth(89); // Just below fog
     
     // Fill with initial fog and desaturation
-    this.fogLayer.fill(0x000000, 0.85); // Much darker for stronger fog effect
-    this.desaturationLayer.fill(0x606060, 0.9); // Darker gray for stronger desaturation
+    this.fogLayer.fill(0x000000, 0.45); // More transparent fog for better visibility
+    this.desaturationLayer.fill(0x606060, 0.35); // Lighter desaturation effect
   }
   
   // Main update method that handles both polygon and tile-based vision
@@ -87,12 +87,12 @@ export class VisionRenderer {
     
     // Create fog effect (darkening)
     const fogGraphics = this.scene.make.graphics({ x: 0, y: 0 }, false);
-    fogGraphics.fillStyle(0x000000, 0.85); // Much darker fog
+    fogGraphics.fillStyle(0x000000, 0.45); // More transparent fog for better visibility
     fogGraphics.fillRect(0, 0, GAME_CONFIG.GAME_WIDTH, GAME_CONFIG.GAME_HEIGHT);
     
     // Create desaturation effect  
     const desatGraphics = this.scene.make.graphics({ x: 0, y: 0 }, false);
-    desatGraphics.fillStyle(0x606060, 0.8); // Darker gray for stronger desaturation
+    desatGraphics.fillStyle(0x606060, 0.35); // Lighter desaturation effect
     desatGraphics.fillRect(0, 0, GAME_CONFIG.GAME_WIDTH, GAME_CONFIG.GAME_HEIGHT);
     
     // Create mask for visible area
@@ -151,8 +151,8 @@ export class VisionRenderer {
     const fogGraphics = this.scene.make.graphics({ x: 0, y: 0 }, false);
     const desatGraphics = this.scene.make.graphics({ x: 0, y: 0 }, false);
     
-    fogGraphics.fillStyle(0x000000, 0.85); // Much darker fog
-    desatGraphics.fillStyle(0x606060, 0.8); // Darker gray for stronger desaturation
+    fogGraphics.fillStyle(0x000000, 0.45); // More transparent fog for better visibility
+    desatGraphics.fillStyle(0x606060, 0.35); // Lighter desaturation effect
     
     // Draw fog and desaturation for each tile that is NOT visible
     const totalTiles = VISION_CONSTANTS.GRID_WIDTH * VISION_CONSTANTS.GRID_HEIGHT;

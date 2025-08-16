@@ -13,7 +13,7 @@ class NetworkSystemSingleton {
       const currentState = this.instance.getConnectionState();
       const isAuthenticated = this.instance.isAuthenticated();
       const socketConnected = this.instance.isSocketConnected();
-      console.log(`NetworkSystemSingleton: Updating scene from ${this.instance.scene?.scene?.key} to ${scene.scene.key}`);
+      console.log(`NetworkSystemSingleton: Updating scene from ${this.instance.getSceneKey()} to ${scene.scene.key}`);
       console.log(`  Current state: ${currentState}, authenticated: ${isAuthenticated}, socket connected: ${socketConnected}`);
       
       this.instance.updateScene(scene);

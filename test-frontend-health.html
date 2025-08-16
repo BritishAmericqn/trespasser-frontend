@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Frontend Health Check</title>
+  <style>
+    body { font-family: monospace; padding: 20px; background: #1a1a1a; color: #0f0; }
+    .test { margin: 10px 0; padding: 10px; border: 1px solid #333; }
+    .pass { background: #001100; border-color: #00ff00; }
+    .fail { background: #110000; border-color: #ff0000; color: #ff0000; }
+    .pending { background: #111100; border-color: #ffff00; color: #ffff00; }
+    h1 { color: #00ffff; }
+    button { padding: 10px 20px; margin: 10px; background: #333; color: #fff; border: 1px solid #666; cursor: pointer; }
+    button:hover { background: #444; }
+    #log { background: #000; padding: 10px; border: 1px solid #333; max-height: 300px; overflow-y: auto; }
+  </style>
+</head>
+<body>
+  <h1>🎮 Trespasser Frontend Health Check</h1>
+  
+  <button onclick="runAllTests()">Run All Tests</button>
+  <button onclick="clearLog()">Clear Log</button>
+  
+  <div id="tests"></div>
+  <h2>Console Log:</h2>
+  <div id="log"></div>
+
+  <script>
+    const tests = [];
+    const testsDiv = document.getElementById('tests');
+    const logDiv = document.getElementById('log');
+    
+    function log(msg, color = '#0f0') {
+      const entry = document.createElement('div');
+      entry.style.color = color;
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+      logDiv.appendChild(entry);
+      logDiv.scrollTop = logDiv.scrollHeight;
+    }
+    
+    function clearLog() {
+      logDiv.innerHTML = '';
+    }
+    
+    function addTest(name, testFn) {
+      const testDiv = document.createElement('div');
+      testDiv.className = 'test pending';
+      testDiv.innerHTML = `<strong>${name}</strong>: <span class="status">Pending...</span>`;
+      testsDiv.appendChild(testDiv);
+      
+      tests.push({
+        name,
+        testFn,
+        div: testDiv
+      });
+    }
+    
+    async function runTest(test) {
+      try {
+        log(`Testing: ${test.name}`);
+        test.div.className = 'test pending';
+        test.div.querySelector('.status').textContent = 'Running...';
+        
+        const result = await test.testFn();
+        
+        if (result) {
+          test.div.className = 'test pass';
+          test.div.querySelector('.status').textContent = '✅ PASS';
+          log(`✅ ${test.name} passed`, '#00ff00');
+        } else {
+          test.div.className = 'test fail';
+          test.div.querySelector('.status').textContent = '❌ FAIL';
+          log(`❌ ${test.name} failed`, '#ff0000');
+        }
+      } catch (error) {
+        test.div.className = 'test fail';
+        test.div.querySelector('.status').textContent = `❌ ERROR: ${error.message}`;
+        log(`❌ ${test.name} error: ${error.message}`, '#ff0000');
+      }
+    }
+    
+    async function runAllTests() {
+      log('Starting all tests...', '#00ffff');
+      for (const test of tests) {
+        await runTest(test);
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+      log('All tests complete!', '#00ffff');
+    }
+    
+    // TEST 1: Check if server is responding
+    addTest('Server Response', async () => {
+      const response = await fetch('http://localhost:5175/');
+      return response.ok;
+    });
+    
+    // TEST 2: Check if main.ts loads
+    addTest('Main Script Loading', async () => {
+      const response = await fetch('http://localhost:5175/src/main.ts');
+      const text = await response.text();
+      return text.includes('Phaser.Game');
+    });
+    
+    // TEST 3: Check if assets are accessible
+    addTest('Asset Loading', async () => {
+      const response = await fetch('http://localhost:5175/assets/blueplayer.png');
+      return response.ok;
+    });
+    
+    // TEST 4: Check WebSocket availability
+    addTest('WebSocket Support', () => {
+      return 'WebSocket' in window;
+    });
+    
+    // TEST 5: Check localStorage
+    addTest('LocalStorage Access', () => {
+      try {
+        localStorage.setItem('test', 'value');
+        const value = localStorage.getItem('test');
+        localStorage.removeItem('test');
+        return value === 'value';
+      } catch {
+        return false;
+      }
+    });
+    
+    // TEST 6: Check Canvas support
+    addTest('Canvas Support', () => {
+      const canvas = document.createElement('canvas');
+      return !!(canvas.getContext && canvas.getContext('2d'));
+    });
+    
+    // TEST 7: Check WebGL support
+    addTest('WebGL Support', () => {
+      const canvas = document.createElement('canvas');
+      const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+      return !!gl;
+    });
+    
+    // TEST 8: Check if SceneManager exists
+    addTest('SceneManager Module', async () => {
+      const response = await fetch('http://localhost:5175/src/client/utils/SceneManager.ts');
+      const text = await response.text();
+      return text.includes('class SceneManager');
+    });
+    
+    // TEST 9: Check if NetworkSystem exists
+    addTest('NetworkSystem Module', async () => {
+      const response = await fetch('http://localhost:5175/src/client/systems/NetworkSystem.ts');
+      const text = await response.text();
+      return text.includes('class NetworkSystem');
+    });
+    
+    // TEST 10: Check if GameScene exists
+    addTest('GameScene Module', async () => {
+      const response = await fetch('http://localhost:5175/src/client/scenes/GameScene.ts');
+      const text = await response.text();
+      return text.includes('class GameScene');
+    });
+    
+    // TEST 11: Check for TypeScript errors
+    addTest('No Reserved Keywords', async () => {
+      const response = await fetch('http://localhost:5175/src/client/scenes/LobbyWaitingScene.ts');
+      const text = await response.text();
+      // Check that we're not using 'debugger' as a variable name
+      return !text.includes('const debugger =') && !text.includes('let debugger =');
+    });
+    
+    // TEST 12: Test backend connectivity (optional)
+    addTest('Backend Connectivity', async () => {
+      try {
+        const response = await fetch('http://localhost:3000/server-info', {
+          method: 'GET',
+          mode: 'cors'
+        });
+        if (response.ok) {
+          const data = await response.json();
+          log(`Backend info: ${JSON.stringify(data)}`, '#00aaaa');
+          return true;
+        }
+        log('Backend not responding (this is okay for frontend-only testing)', '#ffaa00');
+        return false;
+      } catch (error) {
+        log('Backend not available (expected if not running)', '#ffaa00');
+        return false;
+      }
+    });
+    
+    // Auto-run tests after page load
+    window.addEventListener('load', () => {
+      setTimeout(() => {
+        log('Page loaded. Click "Run All Tests" to begin.', '#00ffff');
+      }, 500);
+    });
+  </script>
+</body>
+</html>

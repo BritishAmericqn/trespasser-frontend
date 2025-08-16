@@ -15,6 +15,7 @@ export class LobbyMenuScene extends Phaser.Scene {
   private findMatchButton!: Phaser.GameObjects.Text;
   private privateButton!: Phaser.GameObjects.Text;
   private joinLobbyButton!: Phaser.GameObjects.Text;
+  private joinByIdButton!: Phaser.GameObjects.Text;
   
   // State
   private isConnected: boolean = false;
@@ -65,7 +66,27 @@ export class LobbyMenuScene extends Phaser.Scene {
     // Lobby events (new multi-lobby system)
     this.networkSystem.getSocket()?.on('lobby_joined', (data: any) => {
       console.log('🏢 Lobby joined:', data);
-      this.scene.start('LobbyWaitingScene', { lobbyData: data });
+      
+      // Check if the lobby is already playing
+      if (data.status === 'playing' || data.isInProgress) {
+        console.log('🎮 Joining game in progress, going directly to GameScene');
+        
+        // Stop this scene immediately
+        this.scene.stop();
+        
+        // Use direct scene start for late joins
+        this.scene.manager.start('GameScene', { 
+          matchData: {
+            lobbyId: data.lobbyId,
+            isLateJoin: true,
+            killTarget: data.killTarget || 50,
+            gameMode: data.gameMode || 'deathmatch'
+          }
+        });
+      } else {
+        // Go to waiting room for lobbies that haven't started
+        this.scene.start('LobbyWaitingScene', { lobbyData: data });
+      }
     });
     
     this.networkSystem.getSocket()?.on('matchmaking_failed', (data: any) => {
@@ -154,13 +175,24 @@ export class LobbyMenuScene extends Phaser.Scene {
       fontFamily: 'monospace'
     }).setOrigin(0.5);
 
+    // Join by ID button - for joining friend's games
+    const joinByIdBg = this.add.graphics();
+    joinByIdBg.fillStyle(0x444444);
+    joinByIdBg.fillRect(-buttonWidth/2, 55 - secondaryHeight/2, buttonWidth, secondaryHeight);
+    this.joinByIdButton = this.add.text(0, 55, '🔑 JOIN BY CODE', {
+      fontSize: '12px',
+      color: '#ffffff',
+      fontFamily: 'monospace'
+    }).setOrigin(0.5);
+
     // Setup button interactions
     this.setupButton(this.findMatchButton, '#006600', '#008800', () => this.instantPlay());
     this.setupButton(this.privateButton, '#444444', '#666666', () => this.openServerBrowser());
     this.setupButton(this.joinLobbyButton, '#444444', '#666666', () => this.createPrivateLobby());
+    this.setupButton(this.joinByIdButton, '#444444', '#666666', () => this.joinLobbyById());
 
     // Add to container (backgrounds first, then text)
-    this.mainContainer.add([menuBorder, findMatchBg, this.findMatchButton, privateBg, this.privateButton, joinBg, this.joinLobbyButton]);
+    this.mainContainer.add([menuBorder, findMatchBg, this.findMatchButton, privateBg, this.privateButton, joinBg, this.joinLobbyButton, joinByIdBg, this.joinByIdButton]);
 
     // Status text - positioned below the adjusted container
     this.statusText = this.add.text(GAME_CONFIG.GAME_WIDTH / 2, GAME_CONFIG.GAME_HEIGHT / 2 + 100, 'Connecting...', {
@@ -357,20 +389,24 @@ export class LobbyMenuScene extends Phaser.Scene {
     this.findMatchButton.setAlpha(1);
     this.privateButton.setAlpha(1);
     this.joinLobbyButton.setAlpha(1);
+    this.joinByIdButton.setAlpha(1);
     
     this.findMatchButton.setData('enabled', true);
     this.privateButton.setData('enabled', true);
     this.joinLobbyButton.setData('enabled', true);
+    this.joinByIdButton.setData('enabled', true);
   }
 
   private disableButtons(): void {
     this.findMatchButton.setAlpha(0.5);
     this.privateButton.setAlpha(0.5);
     this.joinLobbyButton.setAlpha(0.5);
+    this.joinByIdButton.setAlpha(0.5);
     
     this.findMatchButton.setData('enabled', false);
     this.privateButton.setData('enabled', false);
     this.joinLobbyButton.setData('enabled', false);
+    this.joinByIdButton.setData('enabled', false);
   }
 
   private instantPlay(): void {
@@ -413,9 +449,8 @@ export class LobbyMenuScene extends Phaser.Scene {
     console.log('🌐 Opening server browser...');
     this.clearError();
     
-    // For now, show a coming soon message
-    // TODO: Implement proper server browser scene
-    this.showError('Server Browser coming soon! Use Instant Play or Create Private for now.');
+    // Launch the server browser scene
+    this.scene.start('ServerBrowserScene');
   }
 
   private createPrivateLobby(): void {

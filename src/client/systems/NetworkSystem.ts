@@ -635,6 +635,10 @@ export class NetworkSystem implements IGameSystem {
   isAuthenticated(): boolean {
     return this.connectionState === ConnectionState.AUTHENTICATED;
   }
+  
+  getSceneKey(): string | undefined {
+    return this.scene?.scene?.key;
+  }
 
   getSocket(): Socket | null {
     return this.socket;
