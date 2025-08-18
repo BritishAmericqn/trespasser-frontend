@@ -62,13 +62,11 @@ export class GameScene extends Phaser.Scene {
   private healthBar!: Phaser.GameObjects.Graphics;
   private crosshair!: Phaser.GameObjects.Graphics;
   private ammoText!: Phaser.GameObjects.Text;
-  private weaponText!: Phaser.GameObjects.Text;
+  // private weaponText!: Phaser.GameObjects.Text; // Removed for clean UI
   private grenadeChargeBar!: Phaser.GameObjects.Graphics;
   private wallGraphics!: Phaser.GameObjects.Graphics;
   private wallSliceSprites: Map<string, Phaser.GameObjects.Sprite> = new Map(); // Back to regular Sprite
   private floorSprites: Phaser.GameObjects.Sprite[] = [];
-  private debugOverlay!: Phaser.GameObjects.Text;
-  private inputText?: Phaser.GameObjects.Text;
   private mouseText?: Phaser.GameObjects.Text;
   
   // Test mode properties
@@ -191,9 +189,7 @@ export class GameScene extends Phaser.Scene {
     
     // Initialize scene debugger (helps diagnose multiple scene issues)
     this.sceneDebugger = new SceneDebugger(this);
-    if (this.game.config.physics?.arcade?.debug) {
-      this.sceneDebugger.enable();
-    }
+    // Debug mode disabled for clean UI
     
     // Force cleanup any lingering scenes (fixes multiple scene issues)
     this.sceneDebugger.forceCleanup();
@@ -371,8 +367,7 @@ export class GameScene extends Phaser.Scene {
     // Create debug UI elements
     this.createUI();
     
-    // Add coordinate debug visualization
-    this.addCoordinateDebug();
+
     
     // Check if we came from the proper flow (should have matchData)
     const isDirectConnection = !this.matchData;
@@ -651,20 +646,7 @@ export class GameScene extends Phaser.Scene {
       // this.updateKillCounter(gameState);
     }
     
-    // Update debug overlay
-    if (this.debugOverlay) {
-      const timeSinceLastState = this.lastGameStateTime > 0 
-        ? ((Date.now() - this.lastGameStateTime) / 1000).toFixed(1) 
-        : 'Never';
-      const color = this.lastGameStateTime > 0 && (Date.now() - this.lastGameStateTime) < 5000 
-        ? '#00ff00' 
-        : '#ff0000';
-      
-      const fogEnabled = (this.visionRenderer as any).fogLayer?.visible ?? true;
-      const fogStatusDisplay = fogEnabled ? 'ENABLED' : 'DISABLED';
-      this.debugOverlay.setText(`Last Game State: ${timeSinceLastState}s ago | Fog: ${fogStatusDisplay}`);
-      this.debugOverlay.setColor(color);
-    }
+
   }
 
   private createPhaserUI(): void {
@@ -684,13 +666,7 @@ export class GameScene extends Phaser.Scene {
     this.ammoText.setOrigin(1, 0);
     this.ammoText.setDepth(100);
 
-    // Create weapon text
-    this.weaponText = this.add.text(10, GAME_CONFIG.GAME_HEIGHT - 20, '1-RIFLE', {
-      fontSize: '8px',
-      color: '#ffffff'
-    });
-    this.weaponText.setOrigin(0, 0);
-    this.weaponText.setDepth(100);
+    // Weapon text removed for clean UI
 
     // Create grenade charge bar
     this.grenadeChargeBar = this.add.graphics();
@@ -723,24 +699,8 @@ export class GameScene extends Phaser.Scene {
     this.healthBar.lineStyle(1, 0xffffff);
     this.healthBar.strokeRect(10, 10, 60, 6);
 
-    // Update crosshair
-    this.crosshair.clear();
-    const centerX = GAME_CONFIG.GAME_WIDTH / 2;
-    const centerY = GAME_CONFIG.GAME_HEIGHT / 2;
-    const isADS = this.weaponUI.isAimingDownSights();
-    const size = isADS ? 2 : 4;
-    
-    this.crosshair.lineStyle(1, isADS ? 0x00ff00 : 0xffffff, 0.8);
-    this.crosshair.beginPath();
-    this.crosshair.moveTo(centerX - size, centerY);
-    this.crosshair.lineTo(centerX + size, centerY);
-    this.crosshair.moveTo(centerX, centerY - size);
-    this.crosshair.lineTo(centerX, centerY + size);
-    this.crosshair.strokePath();
-    
-    // Center dot
-    this.crosshair.fillStyle(isADS ? 0x00ff00 : 0xffffff);
-    this.crosshair.fillRect(centerX - 0.5, centerY - 0.5, 1, 1);
+    // Update crosshair to follow mouse cursor
+    this.updateDynamicCrosshair();
 
     // Update ammo text
     const ammo = this.weaponUI.getCurrentWeaponAmmo();
@@ -752,11 +712,7 @@ export class GameScene extends Phaser.Scene {
       this.ammoText.setColor('#ffffff');
     }
 
-    // Update weapon text
-    const currentWeapon = this.weaponUI.getCurrentWeaponName();
-    const weaponIndex = this.getWeaponIndex(currentWeapon);
-    const weaponDisplay = ['', '1-RIFLE', '2-PISTOL', '3-GRENADE', '4-ROCKET'][weaponIndex];
-    this.weaponText.setText(weaponDisplay);
+    // Weapon text display removed for clean UI
 
     // Update grenade charge
     const grenadeCharge = this.weaponUI.getGrenadeCharge();
@@ -1815,82 +1771,79 @@ export class GameScene extends Phaser.Scene {
   }
 
   private createUI(): void {
-    // Create input state display for debugging - moved to bottom left
-    this.inputText = this.add.text(5, GAME_CONFIG.GAME_HEIGHT - 5, '', {
-      fontSize: '8px',
-      color: '#ffffff',
-      lineSpacing: -1  // Slightly tighter line spacing
-    });
-    this.inputText.setOrigin(0, 1);
-    this.inputText.setDepth(100);
-    
-    // Debug overlay for game state tracking
-    this.debugOverlay = this.add.text(GAME_CONFIG.GAME_WIDTH - 5, GAME_CONFIG.GAME_HEIGHT - 5, 
-      'Last Game State: Never', {
-      fontSize: '8px',
-      color: '#ffff00'
-    }).setOrigin(1, 1).setDepth(1000);
+    // Initialize crosshair
+    this.crosshair = this.add.graphics();
+    this.crosshair.setDepth(100);
 
-    // Update input display every frame
-    this.events.on('update', () => {
-      // Safety check - ensure UI elements still exist
-      if (!this.inputText || !this.inputText.scene) {
-        return;
-      }
-      
-      if (this.inputSystem && this.visualEffectsSystem && this.weaponUI) {
-        const inputState = this.inputSystem.getInputState();
-        const direction = this.inputSystem.getMovementDirection();
-        const speed = this.inputSystem.getMovementSpeed();
-        const currentWeapon = this.inputSystem.getCurrentWeapon();
-        const grenadeCharge = this.inputSystem.getGrenadeChargeLevel();
-        const isADS = this.inputSystem.isAimingDownSights();
-        const effectCounts = this.visualEffectsSystem.getEffectCounts();
-        
-        this.inputText.setText([
-          `Pos: ${this.playerPosition.x.toFixed(0)},${this.playerPosition.y.toFixed(0)} | Move: ${(speed * 100).toFixed(0)}%`,
-          `Wpn: ${currentWeapon || 'None'} ${isADS ? 'ADS' : ''} | Gren: ${grenadeCharge}/5`,
-          `FX: F${effectCounts.muzzleFlashes} E${effectCounts.explosions} H${effectCounts.hitMarkers} P${effectCounts.particles}`,
-          `Keys: F=Toggle Fog, \\=Admin Auth`
-        ].join('\n'));
-      }
-    });
-
-    // Toggle fog visibility for debugging - toggles both layers
-    this.input.keyboard!.on('keydown-F', () => {
-      const fogLayer = (this.visionRenderer as any).fogLayer;
-      const desatLayer = (this.visionRenderer as any).desaturationLayer;
-      if (fogLayer && desatLayer) {
-        const newVisibility = !fogLayer.visible;
-        fogLayer.setVisible(newVisibility);
-        desatLayer.setVisible(newVisibility);
-        console.log(`🌫️ Fog layers toggled - visible: ${newVisibility}`);
-      }
-    });
-    
-    // G key - Request game state from backend
-    this.input.keyboard!.on('keydown-G', () => {
-      console.log('🎮 Manually requesting game state from backend...');
-      this.networkSystem.emit('request_game_state', {});
-      this.networkSystem.emit('get_game_state', {});
-      this.networkSystem.emit('sync_game_state', {});
-      console.log('📡 Sent multiple game state request variants');
-    });
-
-    // Debug keys for restart system testing
-    this.input.keyboard!.on('keydown-BACK_SLASH', () => {
-      console.log('🔑 Testing admin authentication');
-      this.restartSystem.showAuthPrompt();
-    });
-
-
-
-    // Debug functionality removed - only fog toggle (F key) and admin auth (\) remain
-
+    // TODO: Setup HUD elements when we have proper game state  
+    // Health bar will be created in createPhaserUI() method
   }
 
 
   
+  private updateDynamicCrosshair(): void {
+    this.crosshair.clear();
+    
+    // Get current mouse position
+    const pointer = this.input.activePointer;
+    const mouseX = pointer.x;
+    const mouseY = pointer.y;
+    
+    // Get weapon accuracy data
+    const currentWeapon = this.weaponUI.getCurrentWeaponName() || 'rifle';
+    const isADS = this.weaponUI.isAimingDownSights();
+    
+    // Weapon accuracy configuration (higher value = more spread/less accurate)
+    const weaponAccuracy: { [key: string]: { base: number; ads: number } } = {
+      // Primary weapons
+      rifle: { base: 4, ads: 1.5 },
+      smg: { base: 6, ads: 3 },
+      shotgun: { base: 12, ads: 6 },
+      battlerifle: { base: 3, ads: 1 },
+      sniperrifle: { base: 2, ads: 0.5 },
+      
+      // Secondary weapons
+      pistol: { base: 5, ads: 2.5 },
+      revolver: { base: 4, ads: 2 },
+      suppressedpistol: { base: 5, ads: 2.5 },
+      
+      // Support weapons
+      machinegun: { base: 8, ads: 4 },
+      grenadelauncher: { base: 3, ads: 1.5 },
+      antimaterialrifle: { base: 1.5, ads: 0.3 },
+      
+      // Default fallback
+      grenade: { base: 0, ads: 0 },
+      smokegrenade: { base: 0, ads: 0 },
+      flashbang: { base: 0, ads: 0 },
+      rocket: { base: 6, ads: 3 }
+    };
+    
+    // Calculate spread distance
+    const accuracy = weaponAccuracy[currentWeapon] || weaponAccuracy.rifle;
+    const spread = isADS ? accuracy.ads : accuracy.base;
+    
+    // Color based on ADS state
+    const color = isADS ? 0x00ff00 : 0xffffff;
+    const alpha = 0.8;
+    
+    // Draw center pixel
+    this.crosshair.fillStyle(color, alpha);
+    this.crosshair.fillRect(mouseX - 0.5, mouseY - 0.5, 1, 1);
+    
+    // Draw cardinal direction pixels
+    if (spread > 0) {
+      // Top pixel
+      this.crosshair.fillRect(mouseX - 0.5, mouseY - spread - 0.5, 1, 1);
+      // Bottom pixel  
+      this.crosshair.fillRect(mouseX - 0.5, mouseY + spread - 0.5, 1, 1);
+      // Left pixel
+      this.crosshair.fillRect(mouseX - spread - 0.5, mouseY - 0.5, 1, 1);
+      // Right pixel
+      this.crosshair.fillRect(mouseX + spread - 0.5, mouseY - 0.5, 1, 1);
+    }
+  }
+
   private createHealthBar(current: number, max: number): string {
     const percent = Math.max(0, Math.min(1, current / max)); // Clamp between 0 and 1
     const barLength = 10;
@@ -1924,10 +1877,6 @@ export class GameScene extends Phaser.Scene {
     this.input.off('pointermove');
     
     // Clean up UI elements
-    if (this.inputText) {
-      this.inputText.destroy();
-      this.inputText = undefined;
-    }
     if (this.mouseText) {
       this.mouseText.destroy();
       this.mouseText = undefined;
@@ -1968,28 +1917,7 @@ export class GameScene extends Phaser.Scene {
     this.floorSprites.length = 0;
   }
 
-  private addCoordinateDebug(): void {
-    // Draw origin point
-    this.add.circle(0, 0, 3, 0xff0000);
-    this.add.text(0, 0, '(0,0)', { fontSize: '5px', color: '#ff0000' }).setOrigin(0.5);
-    
-    // Draw game bounds (480x270)
-    const bounds = this.add.rectangle(240, 135, 480, 270);
-    bounds.setStrokeStyle(1, 0xffffff, 0.2);
-    
-    // Grid lines removed - no more green lines on the floor
-    
-    // Show mouse world position on move - top right corner
-    this.mouseText = this.add.text(GAME_CONFIG.GAME_WIDTH - 5, 15, '', { fontSize: '8px', color: '#ffff00' });
-    this.mouseText.setOrigin(1, 0);
-    this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
-      if (!this.mouseText || !this.mouseText.scene) {
-        return;
-      }
-      const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
-      this.mouseText.setText(`Mouse: (${worldPoint.x.toFixed(0)}, ${worldPoint.y.toFixed(0)})`);
-    });
-  }
+
 
   private setupAudioListeners(): void {
     // Listen for weapon firing
