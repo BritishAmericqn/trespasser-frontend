@@ -47,6 +47,7 @@ export class GameScene extends Phaser.Scene {
   // Player state tracking
   private playerPosition: { x: number; y: number } = { x: 240, y: 135 };
   private lastGameStateTime: number = 0;
+  private currentGameState: any = null; // Store current game state for kill counter updates
   // Server indicator debug functionality removed
   private isPlayerDead: boolean = false; // Track if local player is dead
   private localPlayerId: string | null = null; // Track local player ID
@@ -640,10 +641,9 @@ export class GameScene extends Phaser.Scene {
     // Update UI elements
     this.updatePhaserUI();
     
-    // Update kill counter if we have match data
-    if (this.killCounterContainer) {
-      // For now, we'll need to implement this when we get game state data
-      // this.updateKillCounter(gameState);
+    // Update kill counter if we have current game state
+    if (this.killCounterContainer && this.currentGameState) {
+      this.updateKillCounter(this.currentGameState);
     }
     
 
@@ -721,6 +721,8 @@ export class GameScene extends Phaser.Scene {
     if (grenadeCharge > 0) {
       const barWidth = 40;
       const barHeight = 4;
+      const centerX = GAME_CONFIG.GAME_WIDTH / 2;
+      const centerY = GAME_CONFIG.GAME_HEIGHT / 2;
       const barX = centerX - barWidth / 2;
       const barY = centerY - 30;
       
@@ -947,6 +949,9 @@ export class GameScene extends Phaser.Scene {
     // Game state updates from server
     this.events.on('network:gameState', (gameState: GameState) => {
       this.lastGameStateTime = Date.now();
+      
+      // Store current game state for kill counter and other systems
+      this.currentGameState = gameState;
       
       // Log game state reception
       const wallCount = gameState.walls ? Object.keys(gameState.walls).length : 0;
@@ -2111,6 +2116,12 @@ export class GameScene extends Phaser.Scene {
       blueScoreText.setText(`BLUE: ${blueKills}/${this.killTarget}`);
     }
 
+    // Check for match end condition
+    if (redKills >= this.killTarget || blueKills >= this.killTarget) {
+      this.handleMatchEnd(redKills, blueKills, gameState.players);
+      return;
+    }
+
     // Add visual feedback when close to target
     if (redKills >= this.killTarget - 5 || blueKills >= this.killTarget - 5) {
       // Flash effect when getting close
@@ -2123,6 +2134,50 @@ export class GameScene extends Phaser.Scene {
         ease: 'Power2'
       });
     }
+  }
+
+  /**
+   * Handle match end when kill target is reached
+   */
+  private handleMatchEnd(redKills: number, blueKills: number, players: any): void {
+    console.log('🏁 Match ended!', { redKills, blueKills, target: this.killTarget });
+
+    // Determine winner
+    const winnerTeam = redKills >= this.killTarget ? 'red' : 'blue';
+    
+    // Calculate match duration (estimate based on when match started)
+    const matchDuration = Date.now() - (this.lastGameStateTime - 30000); // Rough estimate
+    
+    // Process player statistics
+    const playerStats: any[] = [];
+    Object.values(players).forEach((player: any) => {
+      playerStats.push({
+        id: player.id || 'Unknown',
+        team: player.team || 'blue',
+        kills: player.kills || 0,
+        deaths: player.deaths || 0,
+        damageDealt: player.damageDealt || 0,
+        isLocalPlayer: player.id === this.localPlayerId
+      });
+    });
+
+    // Sort players by kills (descending)
+    playerStats.sort((a, b) => b.kills - a.kills);
+
+    // Create match results object
+    const matchResults = {
+      winnerTeam,
+      redKills,
+      blueKills,
+      duration: matchDuration,
+      players: playerStats,
+      killTarget: this.killTarget
+    };
+
+    console.log('🏁 Transitioning to MatchResultsScene with:', matchResults);
+    
+    // Transition to results scene
+    this.scene.start('MatchResultsScene', { matchResults });
   }
 
   // Development method to create a test environment

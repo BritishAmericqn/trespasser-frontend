@@ -191,11 +191,7 @@ export class ConfigureScene extends Phaser.Scene {
     this.createWeaponStatsDisplay();
     this.createNavigationButtons();
     
-    // Randomly auto-select a team
-    const randomTeam = Math.random() < 0.5 ? 'red' : 'blue';
-    this.selectTeam(randomTeam);
-    
-    // Initialize with team tab active
+    // Initialize with team tab active - let user choose their team
     this.showTab('team');
     
     // Already registered with LobbyEventCoordinator early in create()
@@ -691,7 +687,8 @@ export class ConfigureScene extends Phaser.Scene {
   }
 
   private updateStartGameButton(): void {
-    const canStart = this.loadout.team !== null && isValidLoadout(this.loadout);
+    // Allow start even with null team (will be randomized as fallback)
+    const canStart = isValidLoadout(this.loadout);
     
     // Check if already connected
     let isConnected = false;
@@ -741,8 +738,17 @@ export class ConfigureScene extends Phaser.Scene {
   }
 
   private handleStartGame(): void {
-    if (this.loadout.team === null || !isValidLoadout(this.loadout)) {
-      return; // Can't start without valid loadout
+    // Safety fallback: randomize team if somehow null
+    if (this.loadout.team === null) {
+      const fallbackTeam = Math.random() < 0.5 ? 'red' : 'blue';
+      console.warn(`⚠️ No team selected, assigning random team: ${fallbackTeam}`);
+      this.selectTeam(fallbackTeam);
+    }
+    
+    // Validate weapons configuration
+    if (!isValidLoadout(this.loadout)) {
+      console.warn('❌ Invalid loadout configuration');
+      return; // Block if weapons are invalid
     }
 
     // Store loadout for GameScene to use
