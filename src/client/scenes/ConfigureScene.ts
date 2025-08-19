@@ -723,18 +723,10 @@ export class ConfigureScene extends Phaser.Scene {
   }
 
   private handleBack(): void {
-    // Check if already connected
-    if (typeof NetworkSystemSingleton !== 'undefined' && NetworkSystemSingleton.hasInstance()) {
-      const networkSystem = NetworkSystemSingleton.getInstance(this);
-      if (networkSystem.getConnectionState() === ConnectionState.AUTHENTICATED) {
-        // If connected, go back to server connection scene
-        this.scene.start('ServerConnectionSceneText');
-        return;
-      }
-    }
-    
-    // Not connected, return to MenuScene
-    this.scene.start('MenuScene');
+    // Simple, predictable back navigation
+    // Users expect to go back to the lobby menu when in the configure screen
+    console.log('⬅️ ConfigureScene: Back button pressed, returning to LobbyMenuScene');
+    this.scene.start('LobbyMenuScene');
   }
 
   private handleStartGame(): void {

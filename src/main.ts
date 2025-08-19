@@ -10,6 +10,7 @@ import { MatchmakingScene } from './client/scenes/MatchmakingScene';
 import { LobbyWaitingScene } from './client/scenes/LobbyWaitingScene';
 import { MatchResultsScene } from './client/scenes/MatchResultsScene';
 import { ServerBrowserScene } from './client/scenes/ServerBrowserScene';
+import { NavigationDiagnostics } from './client/utils/NavigationDiagnostics';
 
 const config: Phaser.Types.Core.GameConfig = {
   type: Phaser.AUTO,
@@ -32,4 +33,7 @@ const config: Phaser.Types.Core.GameConfig = {
 const game = new Phaser.Game(config);
 
 // Global game reference for debugging
-(window as any).game = game; 
+(window as any).game = game;
+
+// Initialize navigation diagnostics for debugging
+NavigationDiagnostics.initialize(); 

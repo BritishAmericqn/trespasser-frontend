@@ -5,7 +5,6 @@
  */
 
 import NetworkSystemSingleton from './NetworkSystemSingleton';
-import { SceneManager } from '../utils/SceneManager';
 
 interface MatchData {
   lobbyId: string;
@@ -138,16 +137,19 @@ export class LobbyEventCoordinator {
           // Normal lobby start - go to ConfigureScene for loadout selection
           console.log('🎭 Normal lobby start from LobbyWaitingScene → ConfigureScene');
           
-          // Immediately stop the current scene and start ConfigureScene
-          // Use direct scene management to avoid SceneManager conflicts
-          console.log('🎭 Using direct scene start for immediate transition');
-          this.currentScene.scene.stop();
-          this.currentScene.scene.manager.start('ConfigureScene', {
-            matchData: {
-              ...matchData,
-              isLateJoin: false
-            }
-          });
+          // Use delayed transition to avoid breaking scene lifecycle
+          console.log('🎭 Using safe delayed transition');
+          if (this.currentScene) {
+            const scene = this.currentScene;
+            scene.time.delayedCall(50, () => {
+              scene.scene.start('ConfigureScene', {
+                matchData: {
+                  ...matchData,
+                  isLateJoin: false
+                }
+              });
+            });
+          }
           break;
           
         case 'ServerBrowserScene':
@@ -156,15 +158,19 @@ export class LobbyEventCoordinator {
           // ALWAYS go to ConfigureScene first - no exceptions!
           console.log(`🎭 Match started from ${sceneName} → ConfigureScene (universal loadout access)`);
           
-          // Use direct scene management to ensure data is passed correctly
-          console.log('🎭 Using direct scene start to ensure matchData is preserved');
-          this.currentScene.scene.stop();
-          this.currentScene.scene.manager.start('ConfigureScene', {
-            matchData: {
-              ...matchData,
-              isLateJoin: false  // Everyone gets configuration
-            }
-          });
+          // Use safe delayed transition to preserve scene lifecycle
+          console.log('🎭 Using safe delayed transition');
+          if (this.currentScene) {
+            const scene = this.currentScene;
+            scene.time.delayedCall(50, () => {
+              scene.scene.start('ConfigureScene', {
+                matchData: {
+                  ...matchData,
+                  isLateJoin: false  // Everyone gets configuration
+                }
+              });
+            });
+          }
           break;
           
         case 'ConfigureScene':
@@ -178,15 +184,19 @@ export class LobbyEventCoordinator {
           // ALWAYS go to ConfigureScene - universal loadout access
           console.log(`🎭 Fallback route for ${sceneName} → ConfigureScene (universal loadout access)`);
           
-          // Use direct scene management to ensure data is passed correctly
-          console.log('🎭 Using direct scene start for fallback to ensure matchData is preserved');
-          this.currentScene.scene.stop();
-          this.currentScene.scene.manager.start('ConfigureScene', {
-            matchData: {
-              ...matchData,
-              isLateJoin: false  // Everyone gets configuration
-            }
-          });
+          // Use safe delayed transition for fallback
+          console.log('🎭 Using safe delayed transition for fallback');
+          if (this.currentScene) {
+            const scene = this.currentScene;
+            scene.time.delayedCall(50, () => {
+              scene.scene.start('ConfigureScene', {
+                matchData: {
+                  ...matchData,
+                  isLateJoin: false  // Everyone gets configuration
+                }
+              });
+            });
+          }
       }
     } finally {
       // Reset the flag after a short delay

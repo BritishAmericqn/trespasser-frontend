@@ -45,6 +45,7 @@ export class InputSystem implements IGameSystem {
   private lastInputState: InputState | null = null;
   private isPlayerDead: boolean = false; // Track if player is dead
   private lastRespawnRequest: number = 0; // Prevent respawn spam
+  private respawnKeyWasPressed: boolean = false; // Track if respawn key was already pressed
   
   // Weapon-related properties
   private weaponSlots: (string | null)[] = [null, null, null, null, null]; // Will be filled from loadout (0-5, 0 is unused)
@@ -200,7 +201,9 @@ export class InputSystem implements IGameSystem {
       two: Phaser.Input.Keyboard.KeyCodes.TWO,
       three: Phaser.Input.Keyboard.KeyCodes.THREE,
       four: Phaser.Input.Keyboard.KeyCodes.FOUR,
-      five: Phaser.Input.Keyboard.KeyCodes.FIVE
+      five: Phaser.Input.Keyboard.KeyCodes.FIVE,
+      space: Phaser.Input.Keyboard.KeyCodes.SPACE,
+      enter: Phaser.Input.Keyboard.KeyCodes.ENTER
     });
 
     // Set up mouse input
@@ -811,7 +814,7 @@ export class InputSystem implements IGameSystem {
    */
   setPlayerDead(isDead: boolean): void {
     this.isPlayerDead = isDead;
-    console.log(`💀 Player death state set to: ${isDead}`);
+    console.log(`💀 InputSystem: Player death state set to: ${isDead}`);
     
     if (isDead) {
       // Clear any pending actions
@@ -821,8 +824,16 @@ export class InputSystem implements IGameSystem {
       this.grenadeChargeStart = 0;
       this.grenadeChargeLevel = 0;
       
+      // Reset respawn tracking
+      this.respawnKeyWasPressed = false;
+      this.lastRespawnRequest = 0;
+      
       // Stop auto-fire
       this.stopAutoFire();
+    } else {
+      // Reset respawn tracking when alive
+      this.respawnKeyWasPressed = false;
+      this.lastRespawnRequest = 0;
     }
   }
 
@@ -837,39 +848,48 @@ export class InputSystem implements IGameSystem {
    * Handle input for dead players (spectator mode)
    */
   private handleSpectatorInput(): void {
-    // Check for respawn input
-    if ((this.keys.space.isDown || this.keys.enter.isDown) && (this.scene as any).canRespawn) {
-      // Prevent spam clicking
-      if (!this.lastRespawnRequest || Date.now() - this.lastRespawnRequest > 1000) {
-        this.lastRespawnRequest = Date.now();
-        (this.scene as any).requestRespawn();
+    // Safety check - ensure keys are initialized
+    if (!this.keys) {
+      console.warn('⚠️ InputSystem: Keys not initialized for spectator mode');
+      return;
+    }
+    
+    // Check if respawn key is currently pressed
+    const respawnKeyIsDown = this.keys.space?.isDown || this.keys.enter?.isDown;
+    
+    // Only trigger on key press (not hold) - detect transition from not pressed to pressed
+    if (respawnKeyIsDown && !this.respawnKeyWasPressed) {
+      console.log('🎮 Respawn key PRESSED (new press detected)');
+      
+      const canRespawn = (this.scene as any).canRespawn;
+      console.log('🎮 canRespawn:', canRespawn);
+      
+      if (canRespawn) {
+        // Check throttle to prevent spam
+        const now = Date.now();
+        if (!this.lastRespawnRequest || now - this.lastRespawnRequest > 1000) {
+          this.lastRespawnRequest = now;
+          console.log('🎮 Calling requestRespawn on scene');
+          (this.scene as any).requestRespawn();
+        } else {
+          console.log('🎮 Respawn request throttled (wait 1 second between attempts)');
+        }
+      } else {
+        console.log('🎮 Cannot respawn yet - waiting for 3-second cooldown');
       }
     }
     
-    // Allow spectator camera movement (free look)
-    const spectatorSpeed = 3;
-    const camera = this.scene.cameras.main;
+    // Update the key state for next frame
+    this.respawnKeyWasPressed = respawnKeyIsDown;
     
-    if (this.keys.w.isDown) {
-      camera.scrollY -= spectatorSpeed;
-    }
-    if (this.keys.s.isDown) {
-      camera.scrollY += spectatorSpeed;
-    }
-    if (this.keys.a.isDown) {
-      camera.scrollX -= spectatorSpeed;
-    }
-    if (this.keys.d.isDown) {
-      camera.scrollX += spectatorSpeed;
-    }
+    // Camera stays locked on death position - no free movement
+    // This prevents the disorienting effect of the entire screen moving
+    // Future enhancement: implement proper spectator mode that follows other players
     
-    // TODO: Add spectator target switching with TAB
+    // TODO: Add spectator target switching with TAB to follow other players
     // if (this.keys.tab.isDown && !this.lastTabPress) {
     //   this.switchSpectatorTarget();
     //   this.lastTabPress = Date.now();
-    // }
-    // if (!this.keys.tab.isDown && this.lastTabPress && Date.now() - this.lastTabPress > 200) {
-    //   this.lastTabPress = 0;
     // }
   }
 } 

@@ -51,6 +51,8 @@ export class GameScene extends Phaser.Scene {
   // Server indicator debug functionality removed
   private isPlayerDead: boolean = false; // Track if local player is dead
   private localPlayerId: string | null = null; // Track local player ID
+  private killCounterDebugLogged: boolean = false; // Debug flag for kill counter
+  private localKillTracker: Map<string, number> | null = null; // Local kill tracking fallback
   private playerRotation: number = 0;
   private connectionStatus!: Phaser.GameObjects.Text;
   
@@ -969,51 +971,80 @@ export class GameScene extends Phaser.Scene {
       if (myPlayerId) {
         this.playerManager.setLocalPlayerId(myPlayerId);
         
-        // For late joins, check if we have our position in the game state
-        if (this.matchData?.isLateJoin && !this.playerSprite.visible) {
+        // Check if we need to sync our position and team with backend (for both normal and late joins)
+        const shouldSyncWithBackend = this.matchData?.isLateJoin && !this.playerSprite.visible;
+        const isFirstGameState = !this.localPlayerId; // First time receiving game state
+        
+        if (shouldSyncWithBackend || isFirstGameState) {
           try {
-            // Try to find our position in the game state
-            let myPosition = null;
+            // Try to find our player data in the game state
+            let myPlayerData = null;
             
             // Check in visible players (handle both array and object formats)
             if (gameState.visiblePlayers) {
               // Check if it's an array
               if (Array.isArray(gameState.visiblePlayers)) {
-                const myPlayer = gameState.visiblePlayers.find((p: any) => p.id === myPlayerId);
-                if (myPlayer && myPlayer.position) {
-                  myPosition = myPlayer.position;
-                }
+                myPlayerData = gameState.visiblePlayers.find((p: any) => p.id === myPlayerId);
               } 
               // Check if it's an object/map
               else if (typeof gameState.visiblePlayers === 'object') {
-                const myPlayer = (gameState.visiblePlayers as any)[myPlayerId];
-                if (myPlayer && myPlayer.position) {
-                  myPosition = myPlayer.position;
-                }
+                myPlayerData = (gameState.visiblePlayers as any)[myPlayerId];
               }
             }
             
             // Check in all players if not found
-            if (!myPosition && gameState.players) {
+            if (!myPlayerData && gameState.players) {
               const allPlayers = gameState.players instanceof Map ? 
                 gameState.players.get(myPlayerId) : 
                 gameState.players[myPlayerId];
-              if (allPlayers && allPlayers.position) {
-                myPosition = allPlayers.position;
+              if (allPlayers) {
+                myPlayerData = allPlayers;
               }
             }
             
-            // If we found our position, update and make visible
-            if (myPosition) {
-              console.log('📍 Found spawn position in game state:', myPosition);
-              this.playerPosition = { x: myPosition.x, y: myPosition.y };
+            // If we found our player data, sync position and team
+            if (myPlayerData) {
+              console.log('📍 Found player data in game state:', myPlayerData);
               
-              // Update player sprite position and make visible
-              if (this.playerSprite) {
-                this.playerSprite.setPosition(this.playerPosition.x, this.playerPosition.y);
-                this.playerSprite.setVisible(true);
-                this.playerSprite.setAlpha(1);
-                console.log('✅ Late join: Player moved to position from game state:', this.playerPosition);
+              // Update position if available
+              if (myPlayerData.position) {
+                this.playerPosition = { x: myPlayerData.position.x, y: myPlayerData.position.y };
+                
+                // Update player sprite position and make visible
+                if (this.playerSprite) {
+                  this.playerSprite.setPosition(this.playerPosition.x, this.playerPosition.y);
+                  this.playerSprite.setVisible(true);
+                  this.playerSprite.setAlpha(1);
+                  console.log('✅ Player position synced from game state:', this.playerPosition);
+                }
+                
+                // Reset client prediction to server position
+                if (this.clientPrediction) {
+                  this.clientPrediction.reset(this.playerPosition);
+                  console.log('✅ Client prediction reset to server position');
+                }
+              }
+              
+              // Update team color if it doesn't match
+              if (myPlayerData.team && this.playerSprite) {
+                const currentTexture = this.playerSprite.texture.key;
+                const expectedTexture = myPlayerData.team === 'red' ? 'player_red' : 'player_blue';
+                
+                if (currentTexture !== expectedTexture) {
+                  console.log(`🎨 Updating player sprite from ${currentTexture} to ${expectedTexture} (team: ${myPlayerData.team})`);
+                  this.playerSprite.setTexture(expectedTexture);
+                  
+                  // Also update our local loadout to match backend's team assignment
+                  if (this.playerLoadout) {
+                    this.playerLoadout.team = myPlayerData.team;
+                  }
+                }
+              }
+              
+              // Store the player ID if this is the first game state
+              if (isFirstGameState) {
+                this.localPlayerId = myPlayerId;
+                console.log('📌 Stored local player ID:', this.localPlayerId);
               }
               
               // Client prediction will use the updated playerPosition on next update
@@ -1172,7 +1203,34 @@ export class GameScene extends Phaser.Scene {
           
           // Update our health from game state (authoritative)
           if ((serverPlayer as any).health !== undefined) {
-            this.weaponUI.updateHealth((serverPlayer as any).health);
+            const newHealth = (serverPlayer as any).health;
+            
+            // Check if this is a respawn (health went from 0 to positive while dead)
+            if (this.isPlayerDead && newHealth > 0) {
+              console.log('🔄 Detected respawn through game state (health restored to:', newHealth, ')');
+              console.log('🔄 Server position:', serverPlayer.position || serverPlayer);
+              
+              // Extract position from various possible formats
+              let respawnPosition = this.playerPosition;
+              if (serverPlayer.position) {
+                respawnPosition = serverPlayer.position;
+              } else if ((serverPlayer as any).transform?.position) {
+                respawnPosition = (serverPlayer as any).transform.position;
+              } else if (typeof (serverPlayer as any).x === 'number' && typeof (serverPlayer as any).y === 'number') {
+                respawnPosition = { x: (serverPlayer as any).x, y: (serverPlayer as any).y };
+              }
+              
+              console.log('🔄 Using respawn position:', respawnPosition);
+              
+              // Backend respawned us through game state, not event
+              this.handleLocalPlayerRespawn({
+                playerId: myPlayerId,
+                position: respawnPosition,
+                health: newHealth
+              });
+            }
+            
+            this.weaponUI.updateHealth(newHealth);
           }
           
           // Update weapon data from game state (authoritative)
@@ -1293,7 +1351,9 @@ export class GameScene extends Phaser.Scene {
       console.log('💀 Player died event received:', data);
       
       const localSocketId = this.networkSystem.getSocket()?.id;
-      if (data.playerId === localSocketId) {
+      console.log('💀 Checking death - localSocketId:', localSocketId, 'data.playerId:', data.playerId);
+      
+      if (data.playerId === localSocketId || data.playerId === this.localPlayerId) {
         console.log('💀 Local player died!');
         this.handleLocalPlayerDeath(data);
       } else {
@@ -1308,7 +1368,10 @@ export class GameScene extends Phaser.Scene {
       console.log('✨ Player respawned event received:', data);
       
       const localSocketId = this.networkSystem.getSocket()?.id;
-      if (data.playerId === localSocketId) {
+      console.log('✨ Checking respawn - localSocketId:', localSocketId, 'data.playerId:', data.playerId, 'this.localPlayerId:', this.localPlayerId);
+      
+      // Check multiple sources for player ID
+      if (data.playerId === localSocketId || data.playerId === this.localPlayerId) {
         console.log('✨ Local player respawned!');
         this.handleLocalPlayerRespawn(data);
       } else {
@@ -1322,15 +1385,31 @@ export class GameScene extends Phaser.Scene {
     this.events.on('backend:player:killed', (data: any) => {
       console.log('💀 Player killed event received (legacy):', data);
       
+      // Track kills for kill counter (if backend doesn't provide)
+      if (data.killerId && data.killerId !== data.victimId) {
+        console.log('🎯 Kill tracked: killer:', data.killerId, 'victim:', data.victimId);
+        // Store kill count locally if needed
+        if (!this.localKillTracker) {
+          this.localKillTracker = new Map();
+        }
+        const currentKills = this.localKillTracker.get(data.killerId) || 0;
+        this.localKillTracker.set(data.killerId, currentKills + 1);
+      }
+      
       // Check if it's the local player who died
       const localSocketId = this.networkSystem.getSocket()?.id;
-      if (data.playerId === localSocketId) {
+      console.log('💀 LEGACY: Checking death - localSocketId:', localSocketId, 'data.playerId:', data.playerId, 'data.victimId:', data.victimId);
+      
+      // Check both playerId and victimId (backend might use either)
+      const deadPlayerId = data.playerId || data.victimId;
+      
+      if (deadPlayerId === localSocketId || deadPlayerId === this.localPlayerId) {
         console.log('💀 Local player has died (legacy)!');
         this.handleLocalPlayerDeath(data);
       } else {
-        console.log(`💀 Other player died (legacy): ${data.playerId}`);
+        console.log(`💀 Other player died (legacy): ${deadPlayerId}`);
         // Handle other player death (remove from view, etc.)
-        this.playerManager.removePlayer(data.playerId);
+        this.playerManager.removePlayer(deadPlayerId);
       }
     });
 
@@ -1400,16 +1479,22 @@ export class GameScene extends Phaser.Scene {
     // Handle player damage events
     this.events.on('backend:player:damaged', (data: any) => {
       const localSocketId = this.networkSystem.getSocket()?.id;
+      console.log('🩹 Player damaged event:', data);
       
-      if (data.playerId === localSocketId) {
+      if (data.playerId === localSocketId || data.playerId === this.localPlayerId) {
         // Local player took damage
         if (data.newHealth !== undefined) {
           this.weaponUI.updateHealth(data.newHealth);
           
           // Check if health reached zero (death)
-          if (data.newHealth <= 0) {
-            this.isPlayerDead = true;
-            console.log('💀 Local player health reached 0 - marking as dead');
+          if (data.newHealth <= 0 && !this.isPlayerDead) {
+            console.log('💀 Local player health reached 0 - triggering death!');
+            this.handleLocalPlayerDeath({
+              playerId: data.playerId || localSocketId,
+              killerId: data.attackerId || 'Unknown',
+              damageType: data.damageType || 'damage',
+              position: this.playerPosition
+            });
           }
         }
         
@@ -1433,11 +1518,13 @@ export class GameScene extends Phaser.Scene {
    * Handle local player death - show death screen but keep connected
    */
   private handleLocalPlayerDeath(deathData: any): void {
+    console.log('💀 handleLocalPlayerDeath called with:', deathData);
     this.isPlayerDead = true;
     
     // Prevent all input from dead player
     if (this.inputSystem) {
       this.inputSystem.setPlayerDead(true);
+      console.log('💀 InputSystem death state set to true');
     }
     
     // Show death screen with respawn functionality
@@ -1448,10 +1535,21 @@ export class GameScene extends Phaser.Scene {
    * Show death screen UI with respawn options
    */
   private showDeathScreen(killerId: string, damageType: string, deathPosition: any): void {
-    // Create death overlay container
-    const deathContainer = this.add.container(GAME_CONFIG.GAME_WIDTH / 2, GAME_CONFIG.GAME_HEIGHT / 2);
-    deathContainer.setDepth(1000);
-    (this as any).deathContainer = deathContainer; // Store reference for cleanup
+    console.log('💀 showDeathScreen called with:', { killerId, damageType, deathPosition });
+    
+    try {
+      // Clean up any existing death screen first
+      if ((this as any).deathContainer) {
+        console.warn('⚠️ Death screen already exists, cleaning up first');
+        (this as any).deathContainer.destroy();
+        (this as any).deathContainer = null;
+      }
+      
+      // Create death overlay container
+      const deathContainer = this.add.container(GAME_CONFIG.GAME_WIDTH / 2, GAME_CONFIG.GAME_HEIGHT / 2);
+      deathContainer.setDepth(1000);
+      (this as any).deathContainer = deathContainer; // Store reference for cleanup
+      console.log('💀 Death container created');
     
     // Background overlay
     const overlay = this.add.rectangle(0, 0, GAME_CONFIG.GAME_WIDTH, GAME_CONFIG.GAME_HEIGHT, 0x000000, 0.7);
@@ -1505,14 +1603,20 @@ export class GameScene extends Phaser.Scene {
     
     // Show respawn button after 3 seconds
     this.time.delayedCall(3000, () => {
-      this.tweens.add({
-        targets: respawnText,
-        alpha: 1,
-        duration: 300
-      });
+      console.log('💀 3 second delay complete, enabling respawn');
       
-      // Enable manual respawn
+      // Check if death container still exists before tweening
+      if ((this as any).deathContainer && respawnText && respawnText.scene) {
+        this.tweens.add({
+          targets: respawnText,
+          alpha: 1,
+          duration: 300
+        });
+      }
+      
+      // Enable manual respawn regardless of UI state
       (this as any).canRespawn = true;
+      console.log('💀 canRespawn set to true');
     });
     
     // Auto-respawn countdown (5 seconds total)
@@ -1522,45 +1626,102 @@ export class GameScene extends Phaser.Scene {
       repeat: 4,
       callback: () => {
         timeLeft--;
-        if (timeLeft > 0) {
-          countdownText.setText(`Auto-respawn in ${timeLeft}s`);
-        } else {
-          countdownText.setText('');
-          // Auto-respawn if not manually respawned
-          if (this.isPlayerDead) {
-            this.requestRespawn();
+        // Check if death container and countdown text still exist
+        if ((this as any).deathContainer && countdownText && countdownText.scene) {
+          if (timeLeft > 0) {
+            countdownText.setText(`Auto-respawn in ${timeLeft}s`);
+          } else {
+            countdownText.setText('');
+            // Auto-respawn if not manually respawned
+            if (this.isPlayerDead) {
+              console.log('💀 Auto-respawning after countdown');
+              this.requestRespawn();
+            }
           }
+        } else if (this.isPlayerDead && timeLeft <= 0) {
+          // Still trigger respawn even if UI is gone
+          console.log('💀 Auto-respawning (UI destroyed)');
+          this.requestRespawn();
         }
       }
     });
     
     // Store timer reference for cleanup
     (this as any).respawnTimer = countdownTimer;
+    
+    } catch (error) {
+      console.error('❌ Error showing death screen:', error);
+      // Try to at least set the player as dead
+      this.isPlayerDead = true;
+    }
   }
 
   /**
    * Request respawn from backend
    */
-  private requestRespawn(): void {
-    console.log('🔄 Requesting respawn');
+  public requestRespawn(): void {
+    console.log('🔄 Requesting respawn from backend');
+    
+    // Make sure we're actually dead before requesting respawn
+    if (!this.isPlayerDead) {
+      console.warn('⚠️ Cannot respawn - player is not dead');
+      return;
+    }
+    
+    // Check if we can respawn
+    if (!(this as any).canRespawn) {
+      console.warn('⚠️ Cannot respawn yet - waiting for cooldown');
+      return;
+    }
+    
+    console.log('🔄 Sending respawn request to server');
     this.networkSystem.emit('player:respawn');
+    
+    // Failsafe: If backend doesn't send proper respawn event within 2 seconds,
+    // force clear the death screen (backend might just update game state)
+    this.time.delayedCall(2000, () => {
+      if (this.isPlayerDead && (this as any).deathContainer) {
+        console.warn('⚠️ No respawn event received after 2 seconds, forcing death screen clear');
+        // Check if our health was restored in game state
+        const currentHealth = (this.weaponUI as any).health || 100;
+        if (currentHealth > 0) {
+          console.log('✅ Health restored to', currentHealth, '- forcing respawn clear');
+          this.handleLocalPlayerRespawn({
+            playerId: this.networkSystem.getSocket()?.id,
+            position: this.playerPosition,
+            health: currentHealth
+          });
+        } else {
+          console.log('⚠️ Health still 0, forcing respawn anyway');
+          // Force respawn even if health is still 0
+          this.handleLocalPlayerRespawn({
+            playerId: this.networkSystem.getSocket()?.id,
+            position: this.playerPosition,
+            health: 100
+          });
+        }
+      }
+    });
   }
 
   /**
    * Hide death screen when respawned
    */
   private hideDeathScreen(): void {
+    console.log('🎭 hideDeathScreen called');
     const deathContainer = (this as any).deathContainer;
     if (deathContainer) {
-      this.tweens.add({
-        targets: deathContainer,
-        alpha: 0,
-        duration: 300,
-        onComplete: () => {
-          deathContainer.destroy();
-          (this as any).deathContainer = null;
-        }
-      });
+      console.log('🎭 Death container found, destroying it');
+      
+      // Kill any running tweens on it first
+      this.tweens.killTweensOf(deathContainer);
+      
+      // Destroy immediately instead of fading
+      deathContainer.destroy();
+      (this as any).deathContainer = null;
+      console.log('✅ Death screen destroyed');
+    } else {
+      console.warn('⚠️ No death container to hide');
     }
     
     // Clear respawn timer
@@ -1578,14 +1739,66 @@ export class GameScene extends Phaser.Scene {
    * Handle local player respawn - restore input and hide death screen
    */
   private handleLocalPlayerRespawn(respawnData: any): void {
+    console.log('🔄 handleLocalPlayerRespawn called with:', respawnData);
+    
     this.isPlayerDead = false;
+    (this as any).canRespawn = false; // Reset respawn flag
+    
+    // Update player position if provided
+    if (respawnData.position) {
+      console.log('📍 Setting respawn position:', respawnData.position);
+      
+      // Don't use origin (0,0) as respawn position - that's likely a backend bug
+      if (respawnData.position.x === 0 && respawnData.position.y === 0) {
+        console.warn('⚠️ Backend sent origin (0,0) as respawn position - using spawn position instead');
+        // Use team-based spawn position
+        const team = this.playerLoadout?.team || 'blue';
+        const spawnX = team === 'red' ? 50 : 430;  // Red spawns left, blue spawns right
+        const spawnY = 135;  // Middle of the map
+        this.playerPosition = { x: spawnX, y: spawnY };
+      } else {
+        this.playerPosition = { x: respawnData.position.x, y: respawnData.position.y };
+      }
+      
+      // Update player sprite position
+      if (this.playerSprite) {
+        this.playerSprite.setPosition(this.playerPosition.x, this.playerPosition.y);
+        this.playerSprite.setVisible(true);
+        this.playerSprite.setAlpha(1);
+      }
+      
+      // Reset client prediction to respawn position
+      if (this.clientPrediction) {
+        this.clientPrediction.reset(this.playerPosition);
+        console.log('✅ Client prediction reset for respawn');
+      }
+    } else {
+      console.warn('⚠️ No position in respawn data, using team spawn position');
+      // Use team-based spawn position
+      const team = this.playerLoadout?.team || 'blue';
+      const spawnX = team === 'red' ? 50 : 430;
+      const spawnY = 135;
+      this.playerPosition = { x: spawnX, y: spawnY };
+      
+      if (this.playerSprite) {
+        this.playerSprite.setPosition(this.playerPosition.x, this.playerPosition.y);
+        this.playerSprite.setVisible(true);
+        this.playerSprite.setAlpha(1);
+      }
+      
+      if (this.clientPrediction) {
+        this.clientPrediction.reset(this.playerPosition);
+      }
+    }
     
     // Restore input for alive player
     if (this.inputSystem) {
       this.inputSystem.setPlayerDead(false);
+      console.log('✅ Input system re-enabled');
     }
     
     // Hide death screen
+    console.log('🎭 Hiding death screen');
     this.hideDeathScreen();
     
     // Show invulnerability effect if specified
@@ -2093,15 +2306,35 @@ export class GameScene extends Phaser.Scene {
   private updateKillCounter(gameState: any): void {
     if (!this.killCounterContainer || !gameState.players) return;
 
+    // Debug: Log first player to see available fields
+    const players = Object.values(gameState.players);
+    if (players.length > 0 && !this.killCounterDebugLogged) {
+      console.log('📊 Sample player data from game state:', players[0]);
+      console.log('📊 Available player fields:', Object.keys(players[0] as any));
+      this.killCounterDebugLogged = true;
+    }
+
     // Calculate team kill counts
     let redKills = 0;
     let blueKills = 0;
 
     Object.values(gameState.players).forEach((player: any) => {
+      // Check multiple possible field names for kills
+      let playerKills = player.kills || player.killCount || player.score || 0;
+      
+      // Fallback to local kill tracker if backend doesn't provide kills
+      if (playerKills === 0 && this.localKillTracker) {
+        const localKills = this.localKillTracker.get(player.id);
+        if (localKills !== undefined) {
+          playerKills = localKills;
+          console.log(`📊 Using local kill count for ${player.id}: ${localKills}`);
+        }
+      }
+      
       if (player.team === 'red') {
-        redKills += player.kills || 0;
+        redKills += playerKills;
       } else if (player.team === 'blue') {
-        blueKills += player.kills || 0;
+        blueKills += playerKills;
       }
     });
 

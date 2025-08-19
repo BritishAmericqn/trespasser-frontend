@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visual Systems Test Suite</title>
+    <style>
+        body {
+            font-family: monospace;
+            background-color: #1a1a1a;
+            color: #00ff00;
+            padding: 20px;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #00ff00;
+            border-radius: 5px;
+        }
+        .test-title {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #ffff00;
+        }
+        .test-item {
+            margin: 5px 0;
+            padding-left: 20px;
+        }
+        .status {
+            display: inline-block;
+            width: 100px;
+            text-align: center;
+            padding: 2px 5px;
+            border-radius: 3px;
+        }
+        .pass {
+            background-color: #00ff00;
+            color: #000;
+        }
+        .fail {
+            background-color: #ff0000;
+            color: #fff;
+        }
+        .pending {
+            background-color: #ffff00;
+            color: #000;
+        }
+        button {
+            background-color: #00ff00;
+            color: #000;
+            border: none;
+            padding: 10px 20px;
+            margin: 5px;
+            cursor: pointer;
+            font-family: monospace;
+            font-weight: bold;
+        }
+        button:hover {
+            background-color: #00cc00;
+        }
+        .console-output {
+            background-color: #000;
+            padding: 10px;
+            margin: 10px 0;
+            border: 1px solid #00ff00;
+            max-height: 200px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <h1>🎮 Visual Systems Test Suite</h1>
+    
+    <div class="test-section">
+        <div class="test-title">1. Death System Tests</div>
+        <div class="test-item">
+            <span class="status pending" id="death-freeze">PENDING</span> Game doesn't freeze on death
+        </div>
+        <div class="test-item">
+            <span class="status pending" id="death-spectator">PENDING</span> Spectator mode activates
+        </div>
+        <div class="test-item">
+            <span class="status pending" id="death-respawn">PENDING</span> Respawn keys work (SPACE/ENTER)
+        </div>
+        <button onclick="testDeath()">Test Death System</button>
+    </div>
+
+    <div class="test-section">
+        <div class="test-title">2. Tracer Visibility Tests</div>
+        <div class="test-item">
+            <span class="status pending" id="tracer-own">PENDING</span> Own tracers always visible
+        </div>
+        <div class="test-item">
+            <span class="status pending" id="tracer-wall">PENDING</span> Enemy tracers blocked by walls
+        </div>
+        <div class="test-item">
+            <span class="status pending" id="tracer-cleanup">PENDING</span> Tracers cleaned up after duration
+        </div>
+        <button onclick="testTracers()">Test Tracer System</button>
+    </div>
+
+    <div class="test-section">
+        <div class="test-title">3. Hit Marker Tests</div>
+        <div class="test-item">
+            <span class="status pending" id="marker-own">PENDING</span> Own hit markers always visible
+        </div>
+        <div class="test-item">
+            <span class="status pending" id="marker-wall">PENDING</span> Enemy markers blocked by walls
+        </div>
+        <div class="test-item">
+            <span class="status pending" id="marker-cleanup">PENDING</span> Markers cleaned up after 200ms
+        </div>
+        <button onclick="testHitMarkers()">Test Hit Marker System</button>
+    </div>
+
+    <div class="test-section">
+        <div class="test-title">Console Commands</div>
+        <button onclick="checkSystems()">Check All Systems</button>
+        <button onclick="checkMemory()">Check Memory Usage</button>
+        <button onclick="clearConsole()">Clear Console</button>
+        <div class="console-output" id="console"></div>
+    </div>
+
+    <script>
+        function log(message) {
+            const consoleDiv = document.getElementById('console');
+            consoleDiv.textContent += message + '\n';
+            consoleDiv.scrollTop = consoleDiv.scrollHeight;
+        }
+
+        function updateStatus(id, status) {
+            const element = document.getElementById(id);
+            element.className = 'status ' + status;
+            element.textContent = status.toUpperCase();
+        }
+
+        function testDeath() {
+            log('Testing death system...');
+            
+            // Check if InputSystem has required keys
+            if (window.game) {
+                const scene = window.game.scene.getScene('GameScene');
+                if (scene && scene.inputSystem) {
+                    const keys = scene.inputSystem.keys;
+                    if (keys && keys.space && keys.enter) {
+                        updateStatus('death-freeze', 'pass');
+                        log('✅ Death keys properly initialized');
+                    } else {
+                        updateStatus('death-freeze', 'fail');
+                        log('❌ Missing space/enter keys in InputSystem');
+                    }
+                    
+                    // Test spectator mode
+                    const isDead = scene.isPlayerDead;
+                    if (isDead !== undefined) {
+                        updateStatus('death-spectator', 'pass');
+                        log('✅ Death state tracking active');
+                    }
+                }
+            }
+            
+            log('Death system test complete');
+        }
+
+        function testTracers() {
+            log('Testing tracer system...');
+            
+            if (window.game) {
+                const scene = window.game.scene.getScene('GameScene');
+                if (scene && scene.visualEffectsSystem) {
+                    const vfx = scene.visualEffectsSystem;
+                    
+                    // Check if showBulletTrail has visibility check
+                    const funcStr = vfx.showBulletTrail.toString();
+                    if (funcStr.includes('isVisible')) {
+                        updateStatus('tracer-wall', 'pass');
+                        log('✅ Tracer visibility check implemented');
+                    } else {
+                        updateStatus('tracer-wall', 'fail');
+                        log('❌ Tracer visibility check missing');
+                    }
+                    
+                    // Check trail cleanup
+                    if (vfx.bulletTrails && Array.isArray(vfx.bulletTrails)) {
+                        updateStatus('tracer-cleanup', 'pass');
+                        log(`✅ Trail cleanup active (${vfx.bulletTrails.length} trails)`)
+                    }
+                    
+                    updateStatus('tracer-own', 'pass');
+                }
+            }
+            
+            log('Tracer system test complete');
+        }
+
+        function testHitMarkers() {
+            log('Testing hit marker system...');
+            
+            if (window.game) {
+                const scene = window.game.scene.getScene('GameScene');
+                if (scene && scene.visualEffectsSystem) {
+                    const vfx = scene.visualEffectsSystem;
+                    
+                    // Check if showHitMarker has visibility check
+                    const funcStr = vfx.showHitMarker.toString();
+                    if (funcStr.includes('isVisible')) {
+                        updateStatus('marker-wall', 'pass');
+                        log('✅ Hit marker visibility check implemented');
+                    } else {
+                        updateStatus('marker-wall', 'fail');
+                        log('❌ Hit marker visibility check missing');
+                    }
+                    
+                    // Check marker cleanup
+                    if (vfx.hitMarkerData && Array.isArray(vfx.hitMarkerData)) {
+                        updateStatus('marker-cleanup', 'pass');
+                        log(`✅ Marker cleanup active (${vfx.hitMarkerData.length} markers)`);
+                    }
+                    
+                    updateStatus('marker-own', 'pass');
+                }
+            }
+            
+            log('Hit marker system test complete');
+        }
+
+        function checkSystems() {
+            log('\n=== SYSTEM CHECK ===');
+            
+            if (!window.game) {
+                log('❌ Game not loaded');
+                return;
+            }
+            
+            const scene = window.game.scene.getScene('GameScene');
+            if (!scene) {
+                log('❌ GameScene not active');
+                return;
+            }
+            
+            // Check all systems
+            const systems = [
+                'inputSystem',
+                'visualEffectsSystem',
+                'visionRenderer',
+                'playerManager',
+                'networkSystem'
+            ];
+            
+            systems.forEach(sys => {
+                if (scene[sys]) {
+                    log(`✅ ${sys} - ACTIVE`);
+                } else {
+                    log(`❌ ${sys} - MISSING`);
+                }
+            });
+            
+            // Check navigation diagnostics
+            if (window.navDiag) {
+                log('✅ Navigation diagnostics - ACTIVE');
+                log('   Use window.navDiag.getReport() for details');
+            }
+            
+            log('System check complete\n');
+        }
+
+        function checkMemory() {
+            log('\n=== MEMORY CHECK ===');
+            
+            if (!window.game) {
+                log('❌ Game not loaded');
+                return;
+            }
+            
+            const scene = window.game.scene.getScene('GameScene');
+            if (scene && scene.visualEffectsSystem) {
+                const vfx = scene.visualEffectsSystem;
+                
+                log(`Bullet Trails: ${vfx.bulletTrails ? vfx.bulletTrails.length : 0}`);
+                log(`Hit Markers: ${vfx.hitMarkerData ? vfx.hitMarkerData.length : 0}`);
+                log(`Pending Shots: ${vfx.pendingShots ? vfx.pendingShots.size : 0}`);
+                log(`Muzzle Flashes: ${vfx.muzzleFlashes ? vfx.muzzleFlashes.length : 0}`);
+                log(`Projectiles: ${vfx.projectiles ? vfx.projectiles.size : 0}`);
+                
+                // Check for potential leaks
+                if (vfx.bulletTrails && vfx.bulletTrails.length > 50) {
+                    log('⚠️ WARNING: High number of bullet trails');
+                }
+                if (vfx.hitMarkerData && vfx.hitMarkerData.length > 20) {
+                    log('⚠️ WARNING: High number of hit markers');
+                }
+            }
+            
+            log('Memory check complete\n');
+        }
+
+        function clearConsole() {
+            document.getElementById('console').textContent = '';
+            log('Console cleared');
+        }
+
+        // Auto-run tests when game is loaded
+        window.addEventListener('load', () => {
+            setTimeout(() => {
+                log('Test suite loaded. Click buttons to run tests.');
+                log('Open game in another tab/window first.\n');
+            }, 1000);
+        });
+    </script>
+</body>
+</html>

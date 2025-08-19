@@ -260,7 +260,7 @@ export class VisualEffectsSystem implements IGameSystem {
     this.scene.events.on('backend:weapon:hit', (data: any) => {
       
       if (data.position) {
-        this.showHitMarker(data.position);
+        this.showHitMarker(data.position, data.playerId);
         
         let pendingShot: any = null;
         let pendingKey = '';
@@ -314,11 +314,11 @@ export class VisualEffectsSystem implements IGameSystem {
         
         if (pendingShot) {
           // Show trail from firing position to actual hit position
-          this.showBulletTrail(pendingShot.startPosition, data.position, pendingShot.weaponType || data.weaponType);
+          this.showBulletTrail(pendingShot.startPosition, data.position, pendingShot.weaponType || data.weaponType, data.playerId);
           this.pendingShots.delete(pendingKey);
         } else if (data.startPosition) {
           // Fallback to provided start position
-          this.showBulletTrail(data.startPosition, data.position, data.weaponType || 'rifle');
+          this.showBulletTrail(data.startPosition, data.position, data.weaponType || 'rifle', data.playerId);
         }
       }
     });
@@ -385,7 +385,7 @@ export class VisualEffectsSystem implements IGameSystem {
         }
         
         // Show the trail from start to calculated end
-        this.showBulletTrail(pendingShot.startPosition, hitPosition, pendingShot.weaponType || data.weaponType || 'rifle');
+        this.showBulletTrail(pendingShot.startPosition, hitPosition, pendingShot.weaponType || data.weaponType || 'rifle', data.playerId);
         this.pendingShots.delete(pendingKey);
         
         // Show impact effect at the hit position
@@ -402,7 +402,7 @@ export class VisualEffectsSystem implements IGameSystem {
       if (data.position) {
         // console.log('[VisualEffects] Creating wall damage particles at:', data.position);
         this.showWallDamageEffect(data.position, data.material || 'concrete');
-        this.showHitMarker(data.position);
+        this.showHitMarker(data.position, data.playerId);
         
         // Show trail to actual wall hit position
         if (data.playerId) {
@@ -452,7 +452,7 @@ export class VisualEffectsSystem implements IGameSystem {
           }
           
           if (pendingShot) {
-            this.showBulletTrail(pendingShot.startPosition, data.position, pendingShot.weaponType || data.weaponType || 'rifle');
+            this.showBulletTrail(pendingShot.startPosition, data.position, pendingShot.weaponType || data.weaponType || 'rifle', data.playerId);
             this.pendingShots.delete(pendingKey);
           } else {
             // No pending shot found for wall hit by player
@@ -665,7 +665,26 @@ export class VisualEffectsSystem implements IGameSystem {
     }
   }
 
-  showHitMarker(position: { x: number; y: number }): void {
+  showHitMarker(position: { x: number; y: number }, playerId?: string): void {
+    // Check if we should show this hit marker based on visibility
+    if (playerId) {
+      const socket = (this.scene as any).networkSystem?.getSocket();
+      const localPlayerId = socket?.id;
+      
+      // Always show local player's hit markers
+      if (playerId !== localPlayerId) {
+        // For other players, check if the hit position is visible
+        const gameScene = this.scene as any;
+        const visionRenderer = gameScene.visionRenderer;
+        
+        // Check if the hit position is visible
+        if (visionRenderer && !visionRenderer.isVisible(position.x, position.y)) {
+          // Hit position is not visible, don't show the marker
+          return;
+        }
+      }
+    }
+    
     // Add hitmarker data
     this.hitMarkerData.push({
       x: position.x,
@@ -1065,7 +1084,27 @@ export class VisualEffectsSystem implements IGameSystem {
     }
   }
 
-  showBulletTrail(startPos: { x: number; y: number }, endPos: { x: number; y: number }, weaponType: string = 'rifle'): void {
+  showBulletTrail(startPos: { x: number; y: number }, endPos: { x: number; y: number }, weaponType: string = 'rifle', playerId?: string): void {
+    // Check if we should show this trail based on visibility
+    if (playerId) {
+      const socket = (this.scene as any).networkSystem?.getSocket();
+      const localPlayerId = socket?.id;
+      
+      // Always show local player's trails
+      if (playerId !== localPlayerId) {
+        // For other players, check if they're visible
+        const gameScene = this.scene as any;
+        const playerManager = gameScene.playerManager;
+        const visionRenderer = gameScene.visionRenderer;
+        
+        // Check if the start position is visible
+        if (visionRenderer && !visionRenderer.isVisible(startPos.x, startPos.y)) {
+          // Player is not visible, don't show the trail
+          return;
+        }
+      }
+    }
+    
     const trail = this.scene.add.graphics();
     trail.setDepth(40);
     
