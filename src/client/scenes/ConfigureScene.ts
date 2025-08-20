@@ -745,6 +745,16 @@ export class ConfigureScene extends Phaser.Scene {
 
     // Store loadout for GameScene to use
     this.game.registry.set('playerLoadout', this.loadout);
+    
+    // SENIOR DEV REVIEW: Generate player name if not set
+    // In production, this would come from a UI input field
+    const existingName = this.game.registry.get('playerName');
+    if (!existingName) {
+      const generatedName = `Player${Math.floor(Math.random() * 9999)}`;
+      this.game.registry.set('playerName', generatedName);
+      console.log(`🏷️ Generated player name: ${generatedName}`);
+    }
+    
     console.log('🎮 ConfigureScene: Saved loadout to GAME registry:', this.loadout);
     console.log('🎮 ConfigureScene: Current matchData when starting game:', this.matchData);
     

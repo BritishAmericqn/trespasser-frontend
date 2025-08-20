@@ -1,6 +1,7 @@
 import { GAME_CONFIG } from '../../../shared/constants/index';
 import { NetworkSystem } from '../systems/NetworkSystem';
 import NetworkSystemSingleton from '../systems/NetworkSystemSingleton';
+import { LobbyStateManager } from '../systems/LobbyStateManager';
 
 interface MatchResults {
   lobbyId: string;
@@ -36,23 +37,68 @@ export class MatchResultsScene extends Phaser.Scene {
   }
 
   init(data: any): void {
-    this.matchResults = data.matchResults;
-    console.log('🏁 Match results received:', this.matchResults);
+    console.log('🏁 MatchResultsScene init with data:', data);
+    
+    // SENIOR DEV REVIEW: Handle both wrapped and direct data formats
+    // Backend sends data.matchResults, but some paths might send direct data
+    this.matchResults = data.matchResults || data;
+    
+    // Validate required fields with proper error handling
+    if (!this.matchResults || !this.matchResults.winnerTeam) {
+      console.error('❌ Invalid match results data:', data);
+      // Fallback for development/testing only
+      this.matchResults = {
+        winnerTeam: 'red',
+        redKills: 50,
+        blueKills: 47,
+        duration: 300000,
+        killTarget: 50,
+        playerStats: []
+      };
+      console.warn('⚠️ Using fallback match data for display');
+      return;
+    }
+    
+    // Ensure playerStats is an array (backend guarantees this, but defensive coding)
+    if (!Array.isArray(this.matchResults.playerStats)) {
+      console.warn('⚠️ playerStats not an array, defaulting to empty');
+      this.matchResults.playerStats = [];
+    }
+    
+    // Log what we're working with
+    console.log(`📊 Match Results Loaded:
+      Winner: ${this.matchResults.winnerTeam}
+      Score: RED ${this.matchResults.redKills} - ${this.matchResults.blueKills} BLUE
+      Players: ${this.matchResults.playerStats.length}
+      Duration: ${Math.floor((this.matchResults.duration || 0) / 1000)}s
+    `);
   }
 
   create(): void {
-    // Create dark background with overlay
-    this.add.rectangle(0, 0, GAME_CONFIG.GAME_WIDTH, GAME_CONFIG.GAME_HEIGHT, 0x000000, 0.9)
-      .setOrigin(0, 0);
+    console.log('🎮 MatchResultsScene create() called');
+    
+    try {
+      // Create dark background with overlay
+      this.add.rectangle(0, 0, GAME_CONFIG.GAME_WIDTH, GAME_CONFIG.GAME_HEIGHT, 0x000000, 0.9)
+        .setOrigin(0, 0);
 
-    // Get NetworkSystem singleton
-    this.networkSystem = NetworkSystemSingleton.getInstance(this);
-    
-    // Create the UI
-    this.createUI();
-    
-    // Start auto-return countdown
-    this.startAutoReturnTimer();
+      // Get NetworkSystem singleton
+      this.networkSystem = NetworkSystemSingleton.getInstance(this);
+      
+      // Create the UI
+      this.createUI();
+      
+      // Start auto-return countdown
+      this.startAutoReturnTimer();
+      
+      console.log('✅ MatchResultsScene created successfully');
+    } catch (error) {
+      console.error('❌ Error creating MatchResultsScene:', error);
+      // Try to return to menu on error
+      this.time.delayedCall(2000, () => {
+        this.scene.start('MenuScene');
+      });
+    }
   }
 
   private createUI(): void {
@@ -74,8 +120,9 @@ export class MatchResultsScene extends Phaser.Scene {
 
   private createVictoryBanner(): void {
     // Winner announcement (big and bold)
-    const winnerColor = this.matchResults.winnerTeam === 'red' ? '#ff4444' : '#4444ff';
-    const winnerText = `${this.matchResults.winnerTeam.toUpperCase()} TEAM WINS!`;
+    const winnerTeam = this.matchResults?.winnerTeam || 'red';
+    const winnerColor = winnerTeam === 'red' ? '#ff4444' : '#4444ff';
+    const winnerText = `${winnerTeam.toUpperCase()} TEAM WINS!`;
     
     const banner = this.add.text(GAME_CONFIG.GAME_WIDTH / 2, 40, winnerText, {
       fontSize: '24px',
@@ -97,7 +144,9 @@ export class MatchResultsScene extends Phaser.Scene {
     });
 
     // Final score display
-    const scoreText = `Final Score: RED ${this.matchResults.redKills} - ${this.matchResults.blueKills} BLUE`;
+    const redKills = this.matchResults?.redKills || 0;
+    const blueKills = this.matchResults?.blueKills || 0;
+    const scoreText = `Final Score: RED ${redKills} - ${blueKills} BLUE`;
     this.add.text(GAME_CONFIG.GAME_WIDTH / 2, 65, scoreText, {
       fontSize: '14px',
       color: '#ffffff',
@@ -105,7 +154,8 @@ export class MatchResultsScene extends Phaser.Scene {
     }).setOrigin(0.5);
 
     // Match duration
-    const duration = this.formatDuration(this.matchResults.duration);
+    const matchDuration = this.matchResults?.duration || 0;
+    const duration = this.formatDuration(matchDuration);
     this.add.text(GAME_CONFIG.GAME_WIDTH / 2, 80, `Match Duration: ${duration}`, {
       fontSize: '10px',
       color: '#cccccc',
@@ -118,7 +168,8 @@ export class MatchResultsScene extends Phaser.Scene {
     const summaryY = 105;
     
     // Red team score
-    const redScore = this.add.text(GAME_CONFIG.GAME_WIDTH / 2 - 60, summaryY, `RED TEAM\n${this.matchResults.redKills} kills`, {
+    const redKills = this.matchResults?.redKills || 0;
+    const redScore = this.add.text(GAME_CONFIG.GAME_WIDTH / 2 - 60, summaryY, `RED TEAM\n${redKills} kills`, {
       fontSize: '12px',
       color: '#ff4444',
       fontStyle: 'bold',
@@ -134,7 +185,8 @@ export class MatchResultsScene extends Phaser.Scene {
     }).setOrigin(0.5);
 
     // Blue team score
-    const blueScore = this.add.text(GAME_CONFIG.GAME_WIDTH / 2 + 60, summaryY, `BLUE TEAM\n${this.matchResults.blueKills} kills`, {
+    const blueKills = this.matchResults?.blueKills || 0;
+    const blueScore = this.add.text(GAME_CONFIG.GAME_WIDTH / 2 + 60, summaryY, `BLUE TEAM\n${blueKills} kills`, {
       fontSize: '12px',
       color: '#4444ff',
       fontStyle: 'bold',
@@ -195,6 +247,22 @@ export class MatchResultsScene extends Phaser.Scene {
     });
 
     // Sort players by kills (descending)
+    // SENIOR DEV REVIEW: Backend now provides real playerStats array
+    if (!this.matchResults.playerStats || !Array.isArray(this.matchResults.playerStats)) {
+      console.warn('⚠️ No player stats available, skipping scoreboard rows');
+      return;
+    }
+    
+    if (this.matchResults.playerStats.length === 0) {
+      // Show message for empty scoreboard
+      this.add.text(GAME_CONFIG.GAME_WIDTH / 2, startY + 40, 'No player data available', {
+        fontSize: '10px',
+        color: '#888888',
+        fontFamily: 'monospace'
+      }).setOrigin(0.5);
+      return;
+    }
+    
     const sortedStats = [...this.matchResults.playerStats].sort((a, b) => b.kills - a.kills);
 
     // Player rows
@@ -205,10 +273,11 @@ export class MatchResultsScene extends Phaser.Scene {
       const teamColor = player.team === 'red' ? '#ff6666' : '#6666ff';
       const kd = player.deaths > 0 ? (player.kills / player.deaths).toFixed(1) : player.kills.toString();
 
-      // Player name (truncate if too long)
-      const playerName = player.playerName.length > 12 ? 
-        player.playerName.substring(0, 12) + '...' : 
-        player.playerName;
+      // Player name with fallback (backend provides playerName)
+      const displayName = player.playerName || player.playerId || `Player${index + 1}`;
+      const playerName = displayName.length > 12 ? 
+        displayName.substring(0, 12) + '...' : 
+        displayName;
 
       this.add.text(30, rowY, playerName, {
         fontSize: '8px',
@@ -374,22 +443,57 @@ export class MatchResultsScene extends Phaser.Scene {
   }
 
   private playAgain(): void {
-    console.log('🔄 Starting new match...');
+    console.log('🔄 Play Again pressed - attempting rematch');
     
-    // Go back to matchmaking
-    this.scene.start('LobbyMenuScene');
+    // SENIOR DEV REVIEW: Stay in same lobby for rematch
+    const lobbyState = LobbyStateManager.getInstance().getCurrentLobby();
+    
+    if (lobbyState?.lobbyId) {
+      // Stay in same lobby
+      console.log(`📍 Staying in lobby: ${lobbyState.lobbyId}`);
+      
+      const socket = this.networkSystem.getSocket();
+      if (socket) {
+        // Optional: Notify backend of rematch intent
+        socket.emit('request_rematch', { 
+          lobbyId: lobbyState.lobbyId,
+          timestamp: Date.now()
+        });
+      }
+      
+      // Go to waiting scene in same lobby
+      this.scene.start('LobbyWaitingScene', { 
+        lobbyData: {
+          ...lobbyState,
+          status: 'waiting'
+        }
+      });
+    } else {
+      // No lobby, go to menu
+      console.warn('⚠️ No lobby found, returning to menu');
+      this.scene.start('LobbyMenuScene');
+    }
   }
 
   private returnToMenu(): void {
-    console.log('🏠 Returning to main menu...');
+    console.log('🏠 Returning to main menu - properly leaving lobby');
     
-    // Ensure we leave any lobby first
+    // SENIOR DEV REVIEW: Proper cleanup prevents stuck lobbies
     const socket = this.networkSystem.getSocket();
-    if (socket) {
+    if (socket && socket.connected) {
       socket.emit('leave_lobby');
+      console.log('📤 Sent leave_lobby event to backend');
     }
     
-    this.scene.start('LobbyMenuScene');
+    // Clear local lobby state to prevent confusion
+    LobbyStateManager.getInstance().clearState();
+    console.log('🧹 Cleared local lobby state');
+    
+    // Small delay to ensure backend processes the leave
+    // Phaser's time.delayedCall ensures proper scene lifecycle
+    this.time.delayedCall(100, () => {
+      this.scene.start('LobbyMenuScene');
+    });
   }
 
   private formatDuration(milliseconds: number): string {

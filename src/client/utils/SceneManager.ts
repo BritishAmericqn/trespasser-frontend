@@ -45,34 +45,60 @@ export class SceneManager {
         console.error('⚠️ Transition timeout - forcing reset');
         this.transitioning = false;
       }
-    }, 2000); // 2 second timeout
+    }, 3000); // 3 second timeout for complex transitions
     
     try {
-      // Stop all active scenes first (except LoadingScene and target)
+      // Stop all OTHER active scenes first (except LoadingScene, target, and current)
       const sceneManager = currentScene.scene.manager;
       const scenes = sceneManager.scenes;
+      const currentSceneName = currentScene.scene.key;
       
       scenes.forEach((scene: Phaser.Scene) => {
         if (scene.scene.isActive() && 
             scene.scene.key !== 'LoadingScene' && 
-            scene.scene.key !== targetScene) {
+            scene.scene.key !== targetScene &&
+            scene.scene.key !== currentSceneName) {  // Don't stop current scene yet
           console.log(`  📛 Stopping active scene: ${scene.scene.key}`);
           scene.scene.stop();
         }
       });
       
-      // Clear our tracking
-      this.activeScenes.clear();
+      // Clear our tracking (except current)
+      this.activeScenes.delete(currentSceneName);
       
-      // Slightly longer delay to ensure cleanup completes
+      // Use delayed call on the CURRENT scene (which is still running)
+      console.log(`  ⏳ Scheduling scene start in 100ms...`);
       currentScene.time.delayedCall(100, () => {
         try {
           // Now start the target scene
           console.log(`  ✅ Starting scene: ${targetScene}`);
+          
+          // Check if target scene exists
+          const targetSceneInstance = currentScene.scene.manager.getScene(targetScene);
+          if (!targetSceneInstance) {
+            throw new Error(`Scene '${targetScene}' not found in scene manager`);
+          }
+          
           currentScene.scene.start(targetScene, data);
           this.activeScenes.add(targetScene);
+          
+          // NOW stop the current scene after starting the new one
+          if (currentSceneName !== targetScene) {
+            console.log(`  📛 Stopping previous scene: ${currentSceneName}`);
+            // Use a small delay before stopping to ensure the new scene is fully started
+            setTimeout(() => {
+              currentScene.scene.stop();
+            }, 50);
+          }
+          
+          console.log(`  ✅ Transition complete to ${targetScene}`);
         } catch (error) {
           console.error(`❌ Failed to start ${targetScene}:`, error);
+          // Try to recover by going to menu
+          if (targetScene !== 'MenuScene' && targetScene !== 'LobbyMenuScene') {
+            console.log('  🔄 Attempting recovery to MenuScene...');
+            currentScene.scene.start('MenuScene');
+          }
         } finally {
           // Always reset the transitioning flag
           this.transitioning = false;

@@ -111,6 +111,15 @@ export class LobbyStateManager {
       });
     });
 
+    // Handle match start cancellation
+    this.socket.on('match_start_cancelled', (data: any) => {
+      console.log('❌ Match start cancelled:', data.reason);
+      this.updateFromPartial({
+        status: 'waiting',
+        countdown: null
+      });
+    });
+
     // Note: match_started is now handled by LobbyEventCoordinator
     // This manager only tracks state, not scene transitions
 
@@ -256,6 +265,28 @@ export class LobbyStateManager {
   }
 
   /**
+   * Handle match end - reset lobby to waiting state
+   * SENIOR DEV REVIEW: Critical for preventing stuck lobbies after match
+   */
+  handleMatchEnd(): void {
+    console.log('🏁 Match ended, updating lobby state for rematch');
+    
+    if (this.currentLobby) {
+      // Keep players in same lobby but reset to waiting
+      // This allows for quick rematch without rejoining
+      this.updateFromPartial({
+        status: 'waiting',
+        playerCount: this.currentLobby.playerCount || 0,
+        countdown: undefined
+      });
+      
+      console.log(`📍 Lobby ${this.currentLobby.lobbyId} reset to waiting state`);
+    } else {
+      console.warn('⚠️ No current lobby to reset');
+    }
+  }
+  
+  /**
    * Cleanup
    */
   destroy(): void {
@@ -269,6 +300,7 @@ export class LobbyStateManager {
       this.socket.off('player_joined_lobby');
       this.socket.off('player_left_lobby');
       this.socket.off('match_starting');
+      this.socket.off('match_start_cancelled');
       // Note: match_started handled by LobbyEventCoordinator
     }
     

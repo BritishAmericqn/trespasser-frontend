@@ -125,10 +125,14 @@ export class MatchmakingScene extends Phaser.Scene {
         this.playerCount = data.playerCount;
         this.updatePlayerCount();
         
-        // If we now have 2+ players, backend will handle auto-start
-        if (this.playerCount >= 2) {
+        // Check for full lobby or enough players
+        if (this.playerCount === 8) {
+          console.log('🚀 Lobby full - immediate start!');
+          this.statusText.setText('LOBBY FULL - STARTING NOW!');
+          this.statusText.setColor('#00ff00');
+        } else if (this.playerCount >= 2) {
           console.log('✅ Player joined, now have enough players - backend will start match');
-          this.statusText.setText('Ready! Match will start soon...');
+          this.statusText.setText(`Ready! Match will start soon... (${this.playerCount}/8 players)`);
           this.statusText.setColor('#00ff00');
         }
       }
@@ -149,8 +153,23 @@ export class MatchmakingScene extends Phaser.Scene {
     // Match starting countdown
     socket.on('match_starting', (data: any) => {
       console.log('⏱️ Match starting soon:', data);
-      // Update status to show match is about to start
-      this.statusText.setText(`Match starting in ${data.countdown}s...`);
+      
+      // Handle immediate start for full lobbies
+      if (data.countdown === 1) {
+        this.statusText.setText('FULL LOBBY - STARTING NOW!');
+        this.statusText.setColor('#00ff00');
+      } else {
+        // Normal countdown (10 seconds)
+        this.statusText.setText(`Match starting in ${data.countdown}s...`);
+        this.statusText.setColor('#ffff00');
+      }
+    });
+    
+    // Handle match start cancellation
+    socket.on('match_start_cancelled', (data: any) => {
+      console.log('❌ Match start cancelled:', data.reason);
+      this.statusText.setText(data.reason || 'Not enough players');
+      this.statusText.setColor('#ff6600');
     });
     
     socket.on('matchmaking_failed', (data: any) => {
@@ -164,6 +183,17 @@ export class MatchmakingScene extends Phaser.Scene {
     socket.on('disconnect', () => {
       this.stopLoadingAnimation();
       this.scene.start('LobbyMenuScene');
+    });
+    
+    // Clean up listeners on scene shutdown
+    this.events.once('shutdown', () => {
+      socket.off('lobby_joined');
+      socket.off('player_joined_lobby');
+      socket.off('player_left_lobby');
+      socket.off('match_starting');
+      socket.off('match_start_cancelled');
+      socket.off('matchmaking_failed');
+      socket.off('disconnect');
     });
   }
   
@@ -353,7 +383,7 @@ export class MatchmakingScene extends Phaser.Scene {
 
     // Instructions at bottom
     this.add.text(GAME_CONFIG.GAME_WIDTH / 2, GAME_CONFIG.GAME_HEIGHT - 10, 
-      'Average wait time: < 30 seconds', {
+      '2+ players: 10s countdown • 8/8 players: Instant start', {
       fontSize: '8px',
       color: '#666666',
       fontFamily: 'monospace'

@@ -141,8 +141,35 @@ export class LobbyWaitingScene extends Phaser.Scene {
     // Match starting countdown
     socket.on('match_starting', (data: any) => {
       console.log('⏱️ Match starting countdown:', data.countdown);
+      
+      // Stop any existing countdown before starting new one (handles timer resets)
+      if (this.countdownTimer) {
+        console.log('🔄 Timer reset - new player joined or lobby full');
+        this.stopCountdown();
+      }
+      
       this.countdown = data.countdown;
+      
+      // Check if this is immediate start (full lobby)
+      if (data.countdown === 1) {
+        console.log('🚀 Full lobby - immediate start!');
+        this.statusText.setText('FULL LOBBY - STARTING NOW!');
+        this.statusText.setColor('#00ff00');
+      }
+      
       this.startCountdown();
+    });
+    
+    // Handle match start cancellation (when players drop below 2)
+    socket.on('match_start_cancelled', (data: any) => {
+      console.log('❌ Match start cancelled:', data.reason);
+      this.stopCountdown();
+      this.statusText.setText(data.reason || 'Not enough players');
+      this.statusText.setColor('#ff6600');
+      this.countdownText.setVisible(false);
+      
+      // Re-evaluate player count to show appropriate waiting message
+      this.updatePlayerCount();
     });
 
     // Note: match_started is now handled by LobbyEventCoordinator
@@ -541,13 +568,35 @@ export class LobbyWaitingScene extends Phaser.Scene {
       console.warn('playerCountText not initialized or destroyed');
     }
     
-    // Update status based on player count
+    // Update status based on player count with new thresholds
     if (this.statusText && this.statusText.scene) {
-      if (playerCount >= 2) {
-        this.statusText.setText('Ready to start! Auto-starting match...');
+      // Don't update status if countdown is active
+      if (this.countdown !== null && this.countdown > 0) {
+        return; // Keep showing countdown status
+      }
+      
+      if (playerCount === maxPlayers) {
+        // Full lobby - immediate start incoming
+        this.statusText.setText('LOBBY FULL - MATCH STARTING!');
+        this.statusText.setColor('#00ff00');
+        
+        // Add strong visual indicator for full lobby
+        if (this.tweens) {
+          this.tweens.add({
+            targets: this.statusText,
+            scale: 1.05,
+            alpha: 0.8,
+            duration: 300,
+            yoyo: true,
+            repeat: -1,
+            ease: 'Power2'
+          });
+        }
+      } else if (playerCount >= 2) {
+        this.statusText.setText(`Match starts when 2+ players join (${playerCount}/${maxPlayers})`);
         this.statusText.setColor('#00ff00');
       
-        // Add pulsing animation when ready (only if tweens still exist)
+        // Add gentle pulsing animation when ready
         if (this.tweens) {
           this.tweens.add({
             targets: this.statusText,
@@ -560,14 +609,15 @@ export class LobbyWaitingScene extends Phaser.Scene {
         }
         
         // Backend will auto-start the match when we have 2+ players
-        console.log('✅ Ready to start with', playerCount, 'players - waiting for backend');
+        console.log('✅ Ready to start with', playerCount, 'players - waiting for backend countdown');
       } else {
-        this.statusText.setText('Waiting for more players to join...');
+        this.statusText.setText(`Waiting for players (need 2 minimum, ${playerCount}/${maxPlayers})`);
         this.statusText.setColor('#ffaa00');
       
         // Stop pulsing if not enough players
         this.tweens.killTweensOf(this.statusText);
         this.statusText.setAlpha(1);
+        this.statusText.setScale(1);
       }
     } else {
       console.warn('statusText not initialized yet');
@@ -587,21 +637,58 @@ export class LobbyWaitingScene extends Phaser.Scene {
     if (this.countdown === null) return;
 
     this.countdownText.setVisible(true);
-    this.statusText.setText('MATCH STARTING');
     
-    // Stop existing countdown if any
+    // Check if this is immediate start or normal countdown
+    if (this.countdown === 1) {
+      this.statusText.setText('FULL LOBBY - STARTING NOW!');
+      this.statusText.setColor('#00ff00');
+      
+      // Add flash effect for immediate start
+      this.tweens.add({
+        targets: this.statusText,
+        alpha: 0,
+        duration: 200,
+        yoyo: true,
+        repeat: 2,
+        ease: 'Power2'
+      });
+    } else {
+      this.statusText.setText('MATCH STARTING');
+      this.statusText.setColor('#ffff00');
+    }
+    
+    // Stop existing countdown if any (important for timer resets)
     this.stopCountdown();
     
     // Update countdown display immediately
     this.updateCountdownDisplay();
     
-    // Start countdown timer
+    // Don't create interval for immediate start
+    if (this.countdown === 1) {
+      // For immediate start, just wait for backend match_started event
+      console.log('🚀 Immediate start - waiting for match_started event');
+      return;
+    }
+    
+    // Start countdown timer for normal countdown
     this.countdownTimer = this.time.addEvent({
       delay: 1000,
       callback: () => {
         if (this.countdown !== null && this.countdown > 0) {
           this.countdown--;
           this.updateCountdownDisplay();
+          
+          // Add warning sound/effect at 3,2,1
+          if (this.countdown <= 3 && this.countdown > 0) {
+            // Visual pulse effect for final seconds
+            this.tweens.add({
+              targets: this.countdownText,
+              scale: 1.2,
+              duration: 200,
+              yoyo: true,
+              ease: 'Power2'
+            });
+          }
         } else {
           // Countdown reached 0, transition to game
           console.log('⏰ Countdown reached 0, transitioning to GameScene');
@@ -630,18 +717,34 @@ export class LobbyWaitingScene extends Phaser.Scene {
 
   private updateCountdownDisplay(): void {
     if (this.countdown !== null) {
-      this.countdownText.setText(`Starting in ${this.countdown}s...`);
-      
-      // Flash effect for last 3 seconds
-      if (this.countdown <= 3) {
-        this.tweens.add({
-          targets: this.countdownText,
-          scaleX: 1.2,
-          scaleY: 1.2,
-          duration: 200,
-          yoyo: true,
-          ease: 'Power2'
-        });
+      // Special display for immediate start
+      if (this.countdown === 1) {
+        this.countdownText.setText('STARTING NOW!');
+        this.countdownText.setColor('#00ff00');
+        this.countdownText.setScale(1.2);
+      } else {
+        this.countdownText.setText(`Starting in ${this.countdown}s...`);
+        
+        // Color based on time remaining (updated for 10-second countdown)
+        if (this.countdown <= 3) {
+          this.countdownText.setColor('#ff6666'); // Red for urgency
+        } else if (this.countdown <= 5) {
+          this.countdownText.setColor('#ffaa00'); // Orange
+        } else {
+          this.countdownText.setColor('#00ff00'); // Green for plenty of time
+        }
+        
+        // Flash effect for last 3 seconds
+        if (this.countdown <= 3) {
+          this.tweens.add({
+            targets: this.countdownText,
+            scaleX: 1.2,
+            scaleY: 1.2,
+            duration: 200,
+            yoyo: true,
+            ease: 'Power2'
+          });
+        }
       }
     }
   }
@@ -700,6 +803,7 @@ export class LobbyWaitingScene extends Phaser.Scene {
       socket.off('lobby_joined');
       socket.off('player_left_lobby');
       socket.off('match_starting');
+      socket.off('match_start_cancelled');
       socket.off('match_started');
       // Don't remove game:state - that's owned by NetworkSystem
       socket.off('disconnect');

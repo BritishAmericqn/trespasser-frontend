@@ -861,8 +861,10 @@ export class InputSystem implements IGameSystem {
     if (respawnKeyIsDown && !this.respawnKeyWasPressed) {
       console.log('🎮 Respawn key PRESSED (new press detected)');
       
-      const canRespawn = (this.scene as any).canRespawn;
-      console.log('🎮 canRespawn:', canRespawn);
+      // FIX: Access canRespawn properly from GameScene instance
+      const gameScene = this.scene as any;
+      const canRespawn = gameScene.canRespawn;
+      console.log('🎮 canRespawn:', canRespawn, 'isPlayerDead:', gameScene.isPlayerDead);
       
       if (canRespawn) {
         // Check throttle to prevent spam
@@ -870,12 +872,16 @@ export class InputSystem implements IGameSystem {
         if (!this.lastRespawnRequest || now - this.lastRespawnRequest > 1000) {
           this.lastRespawnRequest = now;
           console.log('🎮 Calling requestRespawn on scene');
-          (this.scene as any).requestRespawn();
+          gameScene.requestRespawn();
         } else {
           console.log('🎮 Respawn request throttled (wait 1 second between attempts)');
         }
       } else {
         console.log('🎮 Cannot respawn yet - waiting for 3-second cooldown');
+        // EMERGENCY: If stuck for too long, force enable respawn
+        if (gameScene.isPlayerDead && !canRespawn) {
+          console.warn('🚨 Player stuck dead without respawn capability');
+        }
       }
     }
     

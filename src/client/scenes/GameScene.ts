@@ -55,11 +55,16 @@ export class GameScene extends Phaser.Scene {
   private localKillTracker: Map<string, number> | null = null; // Local kill tracking fallback
   private playerRotation: number = 0;
   private connectionStatus!: Phaser.GameObjects.Text;
+  private lastKillLogTime: number = 0; // Throttle kill count logging
+  private previousKillCounts: Record<string, number> = {}; // Track kill changes
+  private emergencyRespawnTimer: Phaser.Time.TimerEvent | null = null; // Track emergency timer
   
   // Match state (new lobby system)
   private killTarget: number = 50; // Default kill target
   private matchData: any = null;
   private killCounterContainer!: Phaser.GameObjects.Container;
+  private isMatchEnding: boolean = false; // Prevent duplicate match end transitions
+  private matchStartTime: number = 0; // Track actual match start time
   
   // Phaser UI elements
   private healthBar!: Phaser.GameObjects.Graphics;
@@ -176,6 +181,10 @@ export class GameScene extends Phaser.Scene {
     
     // Setup match lifecycle event listeners (new lobby system)
     this.setupMatchLifecycleListeners();
+    
+    // Track match start time for duration calculation
+    this.matchStartTime = Date.now();
+    console.log('⏱️ Match started at:', new Date(this.matchStartTime).toLocaleTimeString());
     
     this.visualEffectsSystem = new VisualEffectsSystem(this);
     this.destructionRenderer = new DestructionRenderer(this);
@@ -333,6 +342,11 @@ export class GameScene extends Phaser.Scene {
     
     // Create kill counter HUD if in a match
     this.createKillCounterHUD();
+    
+    // Create debug UI if in development
+    if (process.env.NODE_ENV !== 'production') {
+      this.createDebugUI();
+    }
     
     // Set up client prediction callback
     this.clientPrediction.setPositionCallback((pos) => {
@@ -518,9 +532,14 @@ export class GameScene extends Phaser.Scene {
     // Send player:join to backend now that scene is ready
     const finalLoadout = this.game.registry.get('playerLoadout');
     if (finalLoadout && this.networkSystem.getSocket()?.connected) {
-      console.log('📤 Sending player:join with loadout');
+      // SENIOR DEV REVIEW: Include player name for scoreboard display
+      const playerName = this.game.registry.get('playerName') || 
+                        `Player${Math.floor(Math.random() * 9999)}`;
+      
+      console.log(`📤 Sending player:join with loadout and name: ${playerName}`);
       this.networkSystem.emit('player:join', {
         loadout: finalLoadout,
+        playerName: playerName,  // Backend expects this for display
         timestamp: Date.now()
       });
       
@@ -952,6 +971,37 @@ export class GameScene extends Phaser.Scene {
     this.events.on('network:gameState', (gameState: GameState) => {
       this.lastGameStateTime = Date.now();
       
+      // DEBUG: Track kill changes to catch double-counting
+      const players = Object.values(gameState.players || {});
+      const playersWithKills = players.filter((p: any) => p.kills > 0);
+      
+      // Check if kills changed
+      let killsChanged = false;
+      players.forEach((p: any) => {
+        const prevKills = this.previousKillCounts?.[p.id] || 0;
+        if (p.kills !== prevKills) {
+          killsChanged = true;
+          console.log(`🔴 KILL CHANGE DETECTED: Player ${p.id?.substring(0, 8)} went from ${prevKills} to ${p.kills} kills`);
+          if (p.kills - prevKills > 1) {
+            console.error(`❌ DOUBLE COUNT BUG: Player gained ${p.kills - prevKills} kills in one update!`);
+          }
+        }
+      });
+      
+      // Store current kill counts for next comparison
+      if (!this.previousKillCounts) this.previousKillCounts = {};
+      players.forEach((p: any) => {
+        this.previousKillCounts[p.id] = p.kills || 0;
+      });
+      
+      // Log current state if kills changed
+      if (killsChanged && playersWithKills.length > 0) {
+        console.log('📊 Current kill counts from backend:');
+        playersWithKills.forEach((p: any) => {
+          console.log(`  ${p.id?.substring(0, 8)} has ${p.kills} kills (team: ${p.team})`);
+        });
+      }
+      
       // Store current game state for kill counter and other systems
       this.currentGameState = gameState;
       
@@ -1343,6 +1393,160 @@ export class GameScene extends Phaser.Scene {
     });
 
     // All debug functionality removed except F key fog toggle
+    
+    // EMERGENCY RESPAWN: R key to force respawn if stuck
+    this.input.keyboard?.on('keydown-R', () => {
+      if (this.isPlayerDead) {
+        console.log('🚨 EMERGENCY RESPAWN: R key pressed while dead');
+        
+        // Force enable respawn
+        (this as any).canRespawn = true;
+        
+        // Request respawn from backend
+        this.requestRespawn();
+        
+        // If no response in 1 second, force local respawn
+        this.time.delayedCall(1000, () => {
+          if (this.isPlayerDead) {
+            console.log('🚨 EMERGENCY: Backend not responding, forcing local respawn');
+            this.handleLocalPlayerRespawn({
+              playerId: this.networkSystem.getSocket()?.id,
+              position: this.getTeamSpawnPosition(),
+              health: 100
+            });
+          }
+        });
+      }
+    });
+    
+    // DEBUG: Test match end flow (Development only)
+    // SENIOR DEV REVIEW: Using backend debug events instead of local simulation
+    if (process.env.NODE_ENV !== 'production') {
+      this.input.keyboard?.on('keydown-M', () => {
+        console.log('🧪 DEBUG: Requesting backend match end (M key pressed)');
+        const socket = this.networkSystem.getSocket();
+        if (socket && socket.connected) {
+          // Try multiple event names that backend might expect
+          const debugData = { 
+            reason: 'Frontend M key test',
+            timestamp: Date.now()
+          };
+          
+          // Try the documented event name
+          socket.emit('debug:trigger_match_end', debugData);
+          console.log('📤 Sent debug:trigger_match_end to backend');
+          
+          // Also try alternative event names the backend might use
+          socket.emit('debug:triggerMatchEnd', debugData);
+          socket.emit('debug_trigger_match_end', debugData);
+          
+          // Set a timeout to check if backend responded
+          let gotResponse = false;
+          
+          // Listen for any response
+          const responseHandler = () => {
+            gotResponse = true;
+          };
+          socket.once('debug:match_end_triggered', responseHandler);
+          socket.once('debug:match_end_failed', responseHandler);
+          
+          this.time.delayedCall(2000, () => {
+            if (!gotResponse) {
+              console.warn('⚠️ No response from backend after 2 seconds.');
+              console.log('💡 Backend claims to have implemented the handler but is not responding.');
+              console.log('💡 Possible issues:');
+              console.log('   1. Backend handler not actually deployed');
+              console.log('   2. Event name mismatch');
+              console.log('   3. Backend handler has a bug');
+              console.log('🔍 Trying to force match end via other methods...');
+              
+              // Try sending a fake high kill count
+              socket.emit('player:update', {
+                kills: 50,
+                timestamp: Date.now()
+              });
+            }
+          });
+        } else {
+          console.error('❌ Cannot trigger debug match end - not connected to backend');
+        }
+      });
+      
+      this.input.keyboard?.on('keydown-N', () => {
+        console.log('🧪 DEBUG: Requesting match state info (N key pressed)');
+        const socket = this.networkSystem.getSocket();
+        if (socket && socket.connected) {
+          // Try multiple event names
+          socket.emit('debug:request_match_state');
+          socket.emit('debug:requestMatchState');
+          socket.emit('debug_request_match_state');
+          console.log('📤 Sent debug match state requests to backend');
+          
+          // Also show local state as fallback
+          this.time.delayedCall(500, () => {
+            if (this.currentGameState) {
+              let redKills = 0, blueKills = 0;
+              Object.values(this.currentGameState.players || {}).forEach((p: any) => {
+                if (p.team === 'red') redKills += p.kills || 0;
+                else if (p.team === 'blue') blueKills += p.kills || 0;
+              });
+              
+              console.log('📊 LOCAL State (Frontend View):');
+              console.log(`  Kill Score: RED ${redKills}/${this.killTarget} vs BLUE ${blueKills}/${this.killTarget}`);
+              console.log(`  Players: ${Object.keys(this.currentGameState.players || {}).length}`);
+              console.log(`  Match Ending: ${this.isMatchEnding}`);
+              
+              // Show individual player data
+              Object.values(this.currentGameState.players || {}).forEach((p: any) => {
+                if (p.kills > 0 || p.deaths > 0) {
+                  console.log(`  Player ${p.id?.substring(0, 8)} (${p.team}): ${p.kills || 0} kills, ${p.deaths || 0} deaths`);
+                }
+              });
+            }
+            
+            console.log('💡 If no backend response above, backend needs socket.on("debug:request_match_state")');
+          });
+        } else {
+          console.error('❌ Cannot request match state - not connected to backend');
+        }
+      });
+      
+      // Listen for debug responses from backend
+      const socket = this.networkSystem.getSocket();
+      if (socket) {
+        socket.on('debug:match_end_triggered', (data: any) => {
+          console.log('✅ Backend triggered match end successfully');
+          if (data.redKills !== undefined && data.blueKills !== undefined) {
+            console.log(`  Final scores - RED: ${data.redKills}, BLUE: ${data.blueKills}`);
+          }
+        });
+        
+        socket.on('debug:match_end_failed', (error: any) => {
+          console.error('❌ Debug match end failed:', error.reason);
+          console.log('  Hint: Match must be in "playing" status');
+        });
+        
+        socket.on('debug:match_state', (state: any) => {
+          console.log('📊 Current Match State from Backend:');
+          console.log(`  Status: ${state.status}`);
+          console.log(`  Kill Score: RED ${state.redKills}/${state.killTarget} vs BLUE ${state.blueKills}/${state.killTarget}`);
+          console.log(`  Players: ${state.playerCount}`);
+          
+          if (state.players && state.players.length > 0) {
+            console.log('\n  Player Details:');
+            state.players.forEach((p: any) => {
+              const status = p.isAlive ? '✅' : '💀';
+              console.log(`    ${status} ${p.playerName} (${p.team}): ${p.kills} kills, ${p.deaths} deaths`);
+            });
+          }
+          
+          if (state.matchStartTime) {
+            const duration = Math.floor((Date.now() - state.matchStartTime) / 1000);
+            console.log(`\n  Match Duration: ${Math.floor(duration / 60)}:${(duration % 60).toString().padStart(2, '0')}`);
+          }
+        });
+      }
+    }
 
     // ===== PLAYER LIFECYCLE EVENT HANDLERS =====
     
@@ -1381,37 +1585,15 @@ export class GameScene extends Phaser.Scene {
       }
     });
 
-    // LEGACY: Handle local player death from kill events (keep for compatibility)
+    // REMOVED: Legacy kill event handler was causing double counting
+    // The new backend:player:died event handles everything now
+    // Commenting out to prevent double kill tracking
+    /*
     this.events.on('backend:player:killed', (data: any) => {
-      console.log('💀 Player killed event received (legacy):', data);
-      
-      // Track kills for kill counter (if backend doesn't provide)
-      if (data.killerId && data.killerId !== data.victimId) {
-        console.log('🎯 Kill tracked: killer:', data.killerId, 'victim:', data.victimId);
-        // Store kill count locally if needed
-        if (!this.localKillTracker) {
-          this.localKillTracker = new Map();
-        }
-        const currentKills = this.localKillTracker.get(data.killerId) || 0;
-        this.localKillTracker.set(data.killerId, currentKills + 1);
-      }
-      
-      // Check if it's the local player who died
-      const localSocketId = this.networkSystem.getSocket()?.id;
-      console.log('💀 LEGACY: Checking death - localSocketId:', localSocketId, 'data.playerId:', data.playerId, 'data.victimId:', data.victimId);
-      
-      // Check both playerId and victimId (backend might use either)
-      const deadPlayerId = data.playerId || data.victimId;
-      
-      if (deadPlayerId === localSocketId || deadPlayerId === this.localPlayerId) {
-        console.log('💀 Local player has died (legacy)!');
-        this.handleLocalPlayerDeath(data);
-      } else {
-        console.log(`💀 Other player died (legacy): ${deadPlayerId}`);
-        // Handle other player death (remove from view, etc.)
-        this.playerManager.removePlayer(deadPlayerId);
-      }
+      // REMOVED - This was tracking kills locally AND backend was counting
+      // causing each kill to count twice
     });
+    */
 
     // Handle new players joining
     this.events.on('network:playerJoined', (data: any) => {
@@ -1519,6 +1701,14 @@ export class GameScene extends Phaser.Scene {
    */
   private handleLocalPlayerDeath(deathData: any): void {
     console.log('💀 handleLocalPlayerDeath called with:', deathData);
+    
+    // Validate we're not already dead (prevent double death issues)
+    if (this.isPlayerDead) {
+      console.warn('⚠️ Already dead, forcing death screen refresh');
+      // Force cleanup any stuck death state
+      this.forceCleanupDeathState();
+    }
+    
     this.isPlayerDead = true;
     
     // Prevent all input from dead player
@@ -1527,8 +1717,71 @@ export class GameScene extends Phaser.Scene {
       console.log('💀 InputSystem death state set to true');
     }
     
+    // Stop client prediction immediately to prevent rubber banding
+    if (this.clientPrediction) {
+      (this.clientPrediction as any).enabled = false;
+      console.log('💀 Client prediction disabled');
+    }
+    
     // Show death screen with respawn functionality
     this.showDeathScreen(deathData.killerId || 'Unknown', deathData.damageType || 'damage', deathData.position);
+    
+    // EMERGENCY FALLBACK: Only activate if death screen fails
+    // Cancel any existing emergency timer first
+    if (this.emergencyRespawnTimer) {
+      console.log('🧹 Cancelling previous emergency respawn timer');
+      this.emergencyRespawnTimer.destroy();
+      this.emergencyRespawnTimer = null;
+    }
+    
+    // Create new emergency timer
+    this.emergencyRespawnTimer = this.time.delayedCall(10000, () => {
+      if (this.isPlayerDead) {
+        console.log('🚨 EMERGENCY: 10 seconds elapsed with no respawn, forcing recovery');
+        this.handleLocalPlayerRespawn({
+          playerId: this.networkSystem.getSocket()?.id,
+          position: this.getTeamSpawnPosition(),
+          health: 100
+        });
+      }
+      this.emergencyRespawnTimer = null; // Clear reference after use
+    });
+  }
+
+  /**
+   * Force cleanup all death-related state - used to prevent stuck states
+   */
+  private forceCleanupDeathState(): void {
+    console.log('🧹 Force cleaning up any existing death state');
+    
+    // Kill ALL death-related tweens
+    if ((this as any).deathContainer) {
+      console.log('   Found existing death container, removing it');
+      this.tweens.killTweensOf((this as any).deathContainer);
+      try {
+        (this as any).deathContainer.destroy();
+      } catch (e) {
+        console.warn('⚠️ Error destroying death container:', e);
+      }
+      (this as any).deathContainer = null;
+    }
+    
+    // Clear all death timers
+    if ((this as any).respawnTimer) {
+      console.log('   Clearing existing respawn timer');
+      (this as any).respawnTimer.remove();
+      (this as any).respawnTimer = null;
+    }
+    
+    // Clear emergency respawn timer
+    if (this.emergencyRespawnTimer) {
+      console.log('   Clearing emergency respawn timer');
+      this.emergencyRespawnTimer.destroy();
+      this.emergencyRespawnTimer = null;
+    }
+    
+    // Reset flags
+    (this as any).canRespawn = false;
   }
 
   /**
@@ -1537,36 +1790,35 @@ export class GameScene extends Phaser.Scene {
   private showDeathScreen(killerId: string, damageType: string, deathPosition: any): void {
     console.log('💀 showDeathScreen called with:', { killerId, damageType, deathPosition });
     
+    // CRITICAL: Force cleanup ANY existing death state first
+    this.forceCleanupDeathState();
+    
     try {
-      // Clean up any existing death screen first
-      if ((this as any).deathContainer) {
-        console.warn('⚠️ Death screen already exists, cleaning up first');
-        (this as any).deathContainer.destroy();
-        (this as any).deathContainer = null;
-      }
-      
       // Create death overlay container
       const deathContainer = this.add.container(GAME_CONFIG.GAME_WIDTH / 2, GAME_CONFIG.GAME_HEIGHT / 2);
-      deathContainer.setDepth(1000);
+      deathContainer.setDepth(10000); // Increased depth to ensure it's on top
+      deathContainer.setScrollFactor(0); // Make it stay in place regardless of camera
       (this as any).deathContainer = deathContainer; // Store reference for cleanup
-      console.log('💀 Death container created');
+      console.log('💀 Death container created at depth 10000');
     
     // Background overlay
-    const overlay = this.add.rectangle(0, 0, GAME_CONFIG.GAME_WIDTH, GAME_CONFIG.GAME_HEIGHT, 0x000000, 0.7);
+    const overlay = this.add.rectangle(0, 0, GAME_CONFIG.GAME_WIDTH, GAME_CONFIG.GAME_HEIGHT, 0x000000, 0.8);
     deathContainer.add(overlay);
     
-    // Death message
+    // Death message - BIG and BOLD
     const deathText = this.add.text(0, -60, 'YOU DIED', {
-      fontSize: '24px',
+      fontSize: '36px',
       color: '#ff0000',
-      align: 'center'
+      align: 'center',
+      fontStyle: 'bold'
     });
     deathText.setOrigin(0.5);
+    deathText.setShadow(2, 2, '#000000', 2, true, true);
     deathContainer.add(deathText);
     
     // Killer info
     const killerText = this.add.text(0, -20, `Killed by ${killerId}`, {
-      fontSize: '14px',
+      fontSize: '16px',
       color: '#ffffff',
       align: 'center'
     });
@@ -1592,14 +1844,9 @@ export class GameScene extends Phaser.Scene {
     countdownText.setOrigin(0.5);
     deathContainer.add(countdownText);
     
-    // Fade in death screen
-    deathContainer.setAlpha(0);
-    this.tweens.add({
-      targets: deathContainer,
-      alpha: 1,
-      duration: 500,
-      ease: 'Power2'
-    });
+    // Make death screen visible immediately (no fade for debugging)
+    deathContainer.setAlpha(1);
+    console.log('💀 Death screen set to visible (alpha 1)');
     
     // Show respawn button after 3 seconds
     this.time.delayedCall(3000, () => {
@@ -1621,6 +1868,9 @@ export class GameScene extends Phaser.Scene {
     
     // Auto-respawn countdown (5 seconds total)
     let timeLeft = 5;
+    // Show initial countdown immediately
+    countdownText.setText(`Auto-respawn in ${timeLeft}s`);
+    
     const countdownTimer = this.time.addEvent({
       delay: 1000,
       repeat: 4,
@@ -1631,16 +1881,16 @@ export class GameScene extends Phaser.Scene {
           if (timeLeft > 0) {
             countdownText.setText(`Auto-respawn in ${timeLeft}s`);
           } else {
-            countdownText.setText('');
+            countdownText.setText('Respawning...');
             // Auto-respawn if not manually respawned
             if (this.isPlayerDead) {
-              console.log('💀 Auto-respawning after countdown');
+              console.log('💀 Auto-respawning after 5 second countdown');
               this.requestRespawn();
             }
           }
         } else if (this.isPlayerDead && timeLeft <= 0) {
           // Still trigger respawn even if UI is gone
-          console.log('💀 Auto-respawning (UI destroyed)');
+          console.log('💀 Auto-respawning (UI destroyed but timer expired)');
           this.requestRespawn();
         }
       }
@@ -1649,11 +1899,32 @@ export class GameScene extends Phaser.Scene {
     // Store timer reference for cleanup
     (this as any).respawnTimer = countdownTimer;
     
+      console.log('💀 Death screen setup complete - should be visible now');
     } catch (error) {
-      console.error('❌ Error showing death screen:', error);
-      // Try to at least set the player as dead
+      console.error('❌ Failed to create death screen:', error);
+      console.error('Error details:', error);
+      // Emergency recovery - force respawn after delay
       this.isPlayerDead = true;
+      this.time.delayedCall(5000, () => {
+        console.warn('⚠️ Emergency respawn due to death screen failure');
+        this.handleLocalPlayerRespawn({
+          playerId: this.networkSystem.getSocket()?.id,
+          position: this.getTeamSpawnPosition(),
+          health: 100
+        });
+      });
     }
+  }
+
+  /**
+   * Get team-based spawn position
+   */
+  private getTeamSpawnPosition(): { x: number, y: number } {
+    const team = this.playerLoadout?.team || 'blue';
+    return {
+      x: team === 'red' ? 50 : 430,  // Red spawns left, blue spawns right
+      y: 135  // Middle of the map
+    };
   }
 
   /**
@@ -1661,6 +1932,9 @@ export class GameScene extends Phaser.Scene {
    */
   public requestRespawn(): void {
     console.log('🔄 Requesting respawn from backend');
+    console.log('   isPlayerDead:', this.isPlayerDead);
+    console.log('   canRespawn:', (this as any).canRespawn);
+    console.log('   socketId:', this.networkSystem.getSocket()?.id);
     
     // Make sure we're actually dead before requesting respawn
     if (!this.isPlayerDead) {
@@ -1668,35 +1942,42 @@ export class GameScene extends Phaser.Scene {
       return;
     }
     
-    // Check if we can respawn
+    // Skip cooldown check if force respawning
     if (!(this as any).canRespawn) {
-      console.warn('⚠️ Cannot respawn yet - waiting for cooldown');
-      return;
+      console.warn('⚠️ Respawn cooldown active, but attempting anyway...');
+      // Don't return - try anyway in case backend allows it
     }
     
-    console.log('🔄 Sending respawn request to server');
+    console.log('🔄 Sending player:respawn event to backend');
     this.networkSystem.emit('player:respawn');
     
-    // Failsafe: If backend doesn't send proper respawn event within 2 seconds,
+    // Also try alternative event names in case backend expects different format
+    this.networkSystem.emit('respawn');
+    this.networkSystem.emit('player_respawn');
+    
+    // Failsafe: If backend doesn't send proper respawn event within 3 seconds,
     // force clear the death screen (backend might just update game state)
-    this.time.delayedCall(2000, () => {
-      if (this.isPlayerDead && (this as any).deathContainer) {
-        console.warn('⚠️ No respawn event received after 2 seconds, forcing death screen clear');
-        // Check if our health was restored in game state
-        const currentHealth = (this.weaponUI as any).health || 100;
+    this.time.delayedCall(3000, () => {
+      if (this.isPlayerDead) {
+        console.warn('⚠️ No backend:player:respawned event received after 3 seconds');
+        
+        // Check if our health was restored in game state (backend might update without event)
+        const currentHealth = (this.weaponUI as any).health || 0;
+        console.log('   Current health:', currentHealth);
+        
         if (currentHealth > 0) {
-          console.log('✅ Health restored to', currentHealth, '- forcing respawn clear');
+          console.log('✅ Health restored to', currentHealth, '- backend updated state without event');
           this.handleLocalPlayerRespawn({
             playerId: this.networkSystem.getSocket()?.id,
             position: this.playerPosition,
             health: currentHealth
           });
         } else {
-          console.log('⚠️ Health still 0, forcing respawn anyway');
-          // Force respawn even if health is still 0
+          console.log('🚨 CRITICAL: Backend not responding, forcing local respawn');
+          // Force respawn locally to prevent permanent ghost state
           this.handleLocalPlayerRespawn({
             playerId: this.networkSystem.getSocket()?.id,
-            position: this.playerPosition,
+            position: this.getTeamSpawnPosition(),
             health: 100
           });
         }
@@ -1741,63 +2022,63 @@ export class GameScene extends Phaser.Scene {
   private handleLocalPlayerRespawn(respawnData: any): void {
     console.log('🔄 handleLocalPlayerRespawn called with:', respawnData);
     
+    // CRITICAL: Reset ALL death-related state
     this.isPlayerDead = false;
     (this as any).canRespawn = false; // Reset respawn flag
     
-    // Update player position if provided
-    if (respawnData.position) {
-      console.log('📍 Setting respawn position:', respawnData.position);
-      
-      // Don't use origin (0,0) as respawn position - that's likely a backend bug
-      if (respawnData.position.x === 0 && respawnData.position.y === 0) {
-        console.warn('⚠️ Backend sent origin (0,0) as respawn position - using spawn position instead');
-        // Use team-based spawn position
-        const team = this.playerLoadout?.team || 'blue';
-        const spawnX = team === 'red' ? 50 : 430;  // Red spawns left, blue spawns right
-        const spawnY = 135;  // Middle of the map
-        this.playerPosition = { x: spawnX, y: spawnY };
-      } else {
-        this.playerPosition = { x: respawnData.position.x, y: respawnData.position.y };
-      }
-      
-      // Update player sprite position
-      if (this.playerSprite) {
-        this.playerSprite.setPosition(this.playerPosition.x, this.playerPosition.y);
-        this.playerSprite.setVisible(true);
-        this.playerSprite.setAlpha(1);
-      }
-      
-      // Reset client prediction to respawn position
-      if (this.clientPrediction) {
-        this.clientPrediction.reset(this.playerPosition);
-        console.log('✅ Client prediction reset for respawn');
-      }
-    } else {
-      console.warn('⚠️ No position in respawn data, using team spawn position');
-      // Use team-based spawn position
-      const team = this.playerLoadout?.team || 'blue';
-      const spawnX = team === 'red' ? 50 : 430;
-      const spawnY = 135;
-      this.playerPosition = { x: spawnX, y: spawnY };
-      
-      if (this.playerSprite) {
-        this.playerSprite.setPosition(this.playerPosition.x, this.playerPosition.y);
-        this.playerSprite.setVisible(true);
-        this.playerSprite.setAlpha(1);
-      }
-      
-      if (this.clientPrediction) {
-        this.clientPrediction.reset(this.playerPosition);
-      }
+    // Cancel emergency respawn timer if it exists
+    if (this.emergencyRespawnTimer) {
+      console.log('🧹 Cancelling emergency respawn timer on respawn');
+      this.emergencyRespawnTimer.destroy();
+      this.emergencyRespawnTimer = null;
     }
     
-    // Restore input for alive player
+    // Force cleanup death UI (in case it's stuck)
+    this.forceCleanupDeathState();
+    
+    // Validate and set respawn position
+    let finalPosition: { x: number, y: number };
+    if (respawnData.position && 
+        !(respawnData.position.x === 0 && respawnData.position.y === 0)) {
+      finalPosition = { x: respawnData.position.x, y: respawnData.position.y };
+      console.log('📍 Using provided respawn position:', finalPosition);
+    } else {
+      finalPosition = this.getTeamSpawnPosition();
+      console.warn('⚠️ Invalid or missing position, using team spawn:', finalPosition);
+    }
+    
+    this.playerPosition = finalPosition;
+    
+    // Force sprite position update
+    if (this.playerSprite) {
+      this.playerSprite.setPosition(finalPosition.x, finalPosition.y);
+      this.playerSprite.setVisible(true);
+      this.playerSprite.setAlpha(1);
+    }
+    
+    // CRITICAL: Hard reset client prediction to prevent rubber banding
+    if (this.clientPrediction) {
+      this.clientPrediction.reset(finalPosition);
+      // Re-enable prediction
+      (this.clientPrediction as any).enabled = true;
+      console.log('✅ Client prediction reset and re-enabled');
+    }
+    
+    // Force vision system reset if available
+    if ((this as any).visionRenderer) {
+      // Vision renderer needs to know our new position
+      (this as any).visionRenderer.updatePlayerPosition?.(finalPosition);
+    }
+    
+    // Re-enable input
     if (this.inputSystem) {
       this.inputSystem.setPlayerDead(false);
-      console.log('✅ Input system re-enabled');
+      // Force input state reset to clear any stuck states
+      (this.inputSystem as any).lastInputState = null;
+      console.log('✅ Input system re-enabled and reset');
     }
     
-    // Hide death screen
+    // Hide death screen (redundant but safe)
     console.log('🎭 Hiding death screen');
     this.hideDeathScreen();
     
@@ -1811,7 +2092,7 @@ export class GameScene extends Phaser.Scene {
       this.weaponUI.updateHealth(100);
     }
     
-    console.log('✨ Local player respawned successfully');
+    console.log('✨ Local player respawned successfully at', finalPosition);
   }
 
   /**
@@ -2080,6 +2361,17 @@ export class GameScene extends Phaser.Scene {
   }
 
   shutdown(): void {
+    // Reset match state flags
+    this.isMatchEnding = false;
+    this.matchStartTime = 0;
+    
+    // Clean up emergency respawn timer
+    if (this.emergencyRespawnTimer) {
+      console.log('🧹 Cleaning up emergency respawn timer on shutdown');
+      this.emergencyRespawnTimer.destroy();
+      this.emergencyRespawnTimer = null;
+    }
+    
     // Clean up socket listeners
     const socket = this.networkSystem?.getSocket();
     if (socket) {
@@ -2226,8 +2518,43 @@ export class GameScene extends Phaser.Scene {
 
     // Store the handler so we can remove it later
     (this as any).matchEndedHandler = (data: any) => {
-      console.log('🏁 Match ended:', data);
-      SceneManager.transition(this, 'MatchResultsScene', { matchResults: data });
+      console.log('🏁 Match ended event received:', data);
+      
+      // Validate we haven't already transitioned
+      if (this.isMatchEnding) {
+        console.log('⚠️ Already handling match end, ignoring duplicate');
+        return;
+      }
+      
+      // Backend sends match data directly
+      const matchResults = data;
+      
+      // Validate essential data exists
+      if (!matchResults.winnerTeam) {
+        console.error('❌ Invalid match end data - missing winnerTeam');
+        console.log('Received data:', data);
+        return;
+      }
+      
+      // Log what we received for debugging
+      console.log('📊 Match Results:', {
+        winner: matchResults.winnerTeam,
+        score: `RED ${matchResults.redKills} - ${matchResults.blueKills} BLUE`,
+        duration: matchResults.duration,
+        playerCount: matchResults.playerStats?.length || 0
+      });
+      
+      this.isMatchEnding = true;
+      
+      // Clean state before transition
+      this.cleanupForMatchEnd();
+      
+      // Reset lobby state to prevent stuck lobbies
+      const lobbyStateManager = LobbyStateManager.getInstance();
+      lobbyStateManager.handleMatchEnd();
+      
+      // Pass complete match results to the results scene
+      SceneManager.transition(this, 'MatchResultsScene', { matchResults });
     };
     
     socket.on('match_ended', (this as any).matchEndedHandler);
@@ -2245,6 +2572,56 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
+  /**
+   * Create debug UI showing available test keys
+   */
+  private createDebugUI(): void {
+    const debugContainer = this.add.container(10, GAME_CONFIG.GAME_HEIGHT - 80);
+    debugContainer.setDepth(95);
+    debugContainer.setScrollFactor(0);
+    
+    // Background
+    const bg = this.add.graphics();
+    bg.fillStyle(0x000000, 0.7);
+    bg.fillRect(0, 0, 200, 70);
+    debugContainer.add(bg);
+    
+    // Title
+    const title = this.add.text(5, 5, '🧪 DEBUG CONTROLS', {
+      fontSize: '10px',
+      color: '#ffff00',
+      fontFamily: 'monospace',
+      fontStyle: 'bold'
+    });
+    debugContainer.add(title);
+    
+    // Instructions
+    const instructions = [
+      'M - Test match end (50 kills)',
+      'N - Simulate backend event', 
+      'F - Toggle fog of war'
+    ];
+    
+    instructions.forEach((text, i) => {
+      const line = this.add.text(5, 20 + (i * 12), text, {
+        fontSize: '9px',
+        color: '#00ff00',
+        fontFamily: 'monospace'
+      });
+      debugContainer.add(line);
+    });
+    
+    // Make it semi-transparent and pulsing to indicate debug mode
+    this.tweens.add({
+      targets: debugContainer,
+      alpha: { from: 0.8, to: 1 },
+      duration: 1000,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut'
+    });
+  }
+  
   /**
    * Create kill counter HUD for match progress
    */
@@ -2319,17 +2696,14 @@ export class GameScene extends Phaser.Scene {
     let blueKills = 0;
 
     Object.values(gameState.players).forEach((player: any) => {
-      // Check multiple possible field names for kills
-      let playerKills = player.kills || player.killCount || player.score || 0;
-      
-      // Fallback to local kill tracker if backend doesn't provide kills
-      if (playerKills === 0 && this.localKillTracker) {
-        const localKills = this.localKillTracker.get(player.id);
-        if (localKills !== undefined) {
-          playerKills = localKills;
-          console.log(`📊 Using local kill count for ${player.id}: ${localKills}`);
-        }
+      // Validate data types for production safety
+      if (typeof player.kills !== 'number') {
+        console.error(`⚠️ Invalid kills value for player ${player.id}:`, player.kills);
+        return; // Skip this player
       }
+      
+      // Backend now correctly counts kills (no double-counting)
+      const playerKills = player.kills;
       
       if (player.team === 'red') {
         redKills += playerKills;
@@ -2337,6 +2711,20 @@ export class GameScene extends Phaser.Scene {
         blueKills += playerKills;
       }
     });
+
+    // DEBUG: Log team totals (throttled to avoid spam)
+    if (!this.lastKillLogTime || Date.now() - this.lastKillLogTime > 1000) {
+      console.log(`📊 KILL TOTALS - RED: ${redKills}, BLUE: ${blueKills}`);
+      
+      // Also log individual player kills for debugging
+      Object.values(gameState.players).forEach((player: any) => {
+        if (player.kills > 0) {
+          console.log(`  👤 ${player.id?.substring(0, 8)} (${player.team}): ${player.kills} kills`);
+        }
+      });
+      
+      this.lastKillLogTime = Date.now();
+    }
 
     // Update display texts
     const redScoreText = this.killCounterContainer.getData('redScoreText');
@@ -2349,43 +2737,106 @@ export class GameScene extends Phaser.Scene {
       blueScoreText.setText(`BLUE: ${blueKills}/${this.killTarget}`);
     }
 
-    // Check for match end condition
+    // Check for match end condition - DISABLED: Let backend handle this via match_ended event
+    // Client-side detection commented out to prevent duplicate transitions
+    // The backend will send 'match_ended' event when kill target is reached
+    /*
     if (redKills >= this.killTarget || blueKills >= this.killTarget) {
       this.handleMatchEnd(redKills, blueKills, gameState.players);
       return;
     }
-
-    // Add visual feedback when close to target
+    */
+    
+        // SENIOR DEV REVIEW: Match end is now backend-authoritative
+    // We only log and provide visual feedback, no client-side transitions
+    
+    // Log when target is reached (backend will handle match end)
+    if (redKills >= this.killTarget || blueKills >= this.killTarget) {
+      console.log(`🎯 Kill target reached! RED: ${redKills}/${this.killTarget}, BLUE: ${blueKills}/${this.killTarget}`);
+      console.log('⏳ Waiting for backend match_ended event...');
+    }
+    
+    // Visual feedback when approaching target (Phaser tween for UI effect)
     if (redKills >= this.killTarget - 5 || blueKills >= this.killTarget - 5) {
-      // Flash effect when getting close
-      this.tweens.add({
-        targets: this.killCounterContainer,
-        alpha: 0.7,
-        duration: 500,
-        yoyo: true,
-        repeat: 1,
-        ease: 'Power2'
-      });
+      // Flash effect when getting close - pure visual, no logic
+      if (this.killCounterContainer && this.killCounterContainer.scene) {
+        this.tweens.add({
+          targets: this.killCounterContainer,
+          alpha: 0.7,
+          duration: 500,
+          yoyo: true,
+          repeat: 1,
+          ease: 'Power2'
+        });
+      }
     }
   }
 
   /**
+   * Clean up game state before match end transition
+   * LESSONS FROM RESPAWN: Proper state cleanup prevents issues
+   */
+  private cleanupForMatchEnd(): void {
+    console.log('🧹 Cleaning up for match end transition');
+    
+    // Stop accepting input
+    if (this.inputSystem) {
+      // Disable input during match end
+      (this.inputSystem as any).enabled = false;
+    }
+    
+    // Clear any death screens
+    if (this.isPlayerDead) {
+      this.hideDeathScreen();
+    }
+    
+    // Stop vision updates
+    if (this.visionRenderer) {
+      // Don't destroy, just pause updates
+      (this.visionRenderer as any).pauseUpdates = true;
+    }
+    
+    // Clear any active effects
+    if (this.visualEffectsSystem) {
+      this.visualEffectsSystem.clearAllEffects();
+    }
+    
+    // Reset timers
+    if ((this as any).respawnTimer) {
+      (this as any).respawnTimer.remove();
+      (this as any).respawnTimer = null;
+    }
+  }
+  
+  /**
    * Handle match end when kill target is reached
+   * CLIENT-SIDE ONLY - Should wait for backend confirmation
    */
   private handleMatchEnd(redKills: number, blueKills: number, players: any): void {
-    console.log('🏁 Match ended!', { redKills, blueKills, target: this.killTarget });
+    // Prevent duplicate match end calls
+    if (this.isMatchEnding) {
+      console.log('⚠️ Match end already in progress, ignoring duplicate call');
+      return;
+    }
+    
+    console.log('🏁 Client-side match end detected!', { redKills, blueKills, target: this.killTarget });
+    // NOTE: This method is currently disabled in favor of backend event
+    this.isMatchEnding = true;
 
     // Determine winner
     const winnerTeam = redKills >= this.killTarget ? 'red' : 'blue';
     
-    // Calculate match duration (estimate based on when match started)
-    const matchDuration = Date.now() - (this.lastGameStateTime - 30000); // Rough estimate
+    // Calculate match duration properly
+    const matchDuration = this.matchStartTime > 0 ? 
+      Date.now() - this.matchStartTime : 
+      Date.now() - (this.lastGameStateTime - 30000); // Fallback to estimate
     
     // Process player statistics
     const playerStats: any[] = [];
     Object.values(players).forEach((player: any) => {
       playerStats.push({
-        id: player.id || 'Unknown',
+        playerId: player.id || 'Unknown',
+        playerName: player.name || player.id || 'Unknown',  // Add playerName field
         team: player.team || 'blue',
         kills: player.kills || 0,
         deaths: player.deaths || 0,
@@ -2409,9 +2860,17 @@ export class GameScene extends Phaser.Scene {
 
     console.log('🏁 Transitioning to MatchResultsScene with:', matchResults);
     
-    // Transition to results scene
-    this.scene.start('MatchResultsScene', { matchResults });
+    // Cleanup before transition
+    this.cleanupForMatchEnd();
+    
+    // Use SceneManager for safe transition
+    console.log('🎬 Transitioning to MatchResultsScene with data:', matchResults);
+    SceneManager.transition(this, 'MatchResultsScene', { matchResults });
   }
+
+
+  
+
 
   // Development method to create a test environment
   private createTestEnvironment(): void {
