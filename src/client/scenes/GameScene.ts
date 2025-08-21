@@ -21,6 +21,7 @@ import { NotificationSystem } from '../systems/NotificationSystem';
 import { RestartSystem } from '../systems/RestartSystem';
 import { PerformanceMonitor } from '../systems/PerformanceMonitor';
 import { LobbyStateManager } from '../systems/LobbyStateManager';
+import { RespawnManager } from '../systems/RespawnManager';
 
 export class GameScene extends Phaser.Scene {
   private inputSystem!: InputSystem;
@@ -28,6 +29,7 @@ export class GameScene extends Phaser.Scene {
   private visualEffectsSystem!: VisualEffectsSystem;
   private destructionRenderer!: DestructionRenderer;
   private weaponUI!: WeaponUI;
+  private respawnManager!: RespawnManager;
   private clientPrediction!: ClientPrediction;
   private visionRenderer!: VisionRenderer;
   private playerManager!: PlayerManager;
@@ -57,7 +59,7 @@ export class GameScene extends Phaser.Scene {
   private connectionStatus!: Phaser.GameObjects.Text;
   private lastKillLogTime: number = 0; // Throttle kill count logging
   private previousKillCounts: Record<string, number> = {}; // Track kill changes
-  private emergencyRespawnTimer: Phaser.Time.TimerEvent | null = null; // Track emergency timer
+  // Emergency timer removed - RespawnManager handles all fallbacks now
   
   // Match state (new lobby system)
   private killTarget: number = 50; // Default kill target
@@ -193,6 +195,9 @@ export class GameScene extends Phaser.Scene {
     this.visionRenderer = new VisionRenderer(this);
     this.playerManager = new PlayerManager(this);
     this.screenShakeSystem = new ScreenShakeSystem(this);
+    
+    // Initialize RespawnManager for bulletproof respawn system
+    this.respawnManager = new RespawnManager(this);
     
     // Initialize notification and restart systems
     this.notificationSystem = new NotificationSystem(this);
@@ -455,9 +460,42 @@ export class GameScene extends Phaser.Scene {
     
 
     
-    // Add ESC key to leave game
+    // Add ESC key to leave game and return to main menu
     this.input.keyboard?.on('keydown-ESC', () => {
-      SceneManager.transition(this, 'LobbyMenuScene');
+      // Clean up game state properly
+      console.log('🚪 ESC pressed - returning to main menu');
+      
+      // Disconnect from current game
+      const socket = this.networkSystem.getSocket();
+      if (socket) {
+        socket.emit('leave_game');
+        socket.emit('leave_lobby');
+      }
+      
+      // Return to main menu
+      SceneManager.transition(this, 'MenuScene');
+    });
+    
+    // DEBUG: Force respawn (F5)
+    this.input.keyboard?.on('keydown-F5', () => {
+      console.log('🔧 DEBUG: Force respawn triggered (F5)');
+      if (this.respawnManager && this.isPlayerDead) {
+        this.respawnManager.forceLocalRespawn();
+      } else if (!this.isPlayerDead) {
+        console.log('⚠️ Player not dead - cannot force respawn');
+      }
+    });
+    
+    // DEBUG: Validate state (F6)
+    this.input.keyboard?.on('keydown-F6', () => {
+      console.log('🔧 DEBUG: Validating player state (F6)');
+      this.validatePlayerState();
+    });
+    
+    // DEBUG: Reset all systems (F7)
+    this.input.keyboard?.on('keydown-F7', () => {
+      console.log('🔧 DEBUG: Resetting all systems (F7)');
+      this.resetAllSystems();
     });
     
     // Development: Add test mode button (only for development)
@@ -1698,54 +1736,45 @@ export class GameScene extends Phaser.Scene {
 
   /**
    * Handle local player death - show death screen but keep connected
+   * SIMPLIFIED: RespawnManager handles all fallbacks now
    */
   private handleLocalPlayerDeath(deathData: any): void {
     console.log('💀 handleLocalPlayerDeath called with:', deathData);
     
-    // Validate we're not already dead (prevent double death issues)
+    // Prevent double death
     if (this.isPlayerDead) {
-      console.warn('⚠️ Already dead, forcing death screen refresh');
-      // Force cleanup any stuck death state
-      this.forceCleanupDeathState();
+      console.log('⚠️ Already dead, ignoring duplicate death event');
+      return;
     }
     
     this.isPlayerDead = true;
     
-    // Prevent all input from dead player
+    // 1. Disable input immediately
     if (this.inputSystem) {
       this.inputSystem.setPlayerDead(true);
-      console.log('💀 InputSystem death state set to true');
+      console.log('💀 InputSystem disabled');
     }
     
-    // Stop client prediction immediately to prevent rubber banding
+    // 2. Stop client prediction to prevent ghost movements
     if (this.clientPrediction) {
       (this.clientPrediction as any).enabled = false;
       console.log('💀 Client prediction disabled');
     }
     
-    // Show death screen with respawn functionality
+    // 3. Show death screen
     this.showDeathScreen(deathData.killerId || 'Unknown', deathData.damageType || 'damage', deathData.position);
     
-    // EMERGENCY FALLBACK: Only activate if death screen fails
-    // Cancel any existing emergency timer first
-    if (this.emergencyRespawnTimer) {
-      console.log('🧹 Cancelling previous emergency respawn timer');
-      this.emergencyRespawnTimer.destroy();
-      this.emergencyRespawnTimer = null;
-    }
-    
-    // Create new emergency timer
-    this.emergencyRespawnTimer = this.time.delayedCall(10000, () => {
-      if (this.isPlayerDead) {
-        console.log('🚨 EMERGENCY: 10 seconds elapsed with no respawn, forcing recovery');
-        this.handleLocalPlayerRespawn({
-          playerId: this.networkSystem.getSocket()?.id,
-          position: this.getTeamSpawnPosition(),
-          health: 100
-        });
+    // 4. Set respawn cooldown (3 seconds)
+    (this as any).canRespawn = false;
+    this.time.delayedCall(3000, () => {
+      if (this.scene && this.scene.isActive()) {
+        (this as any).canRespawn = true;
+        console.log('✅ Respawn cooldown complete - player can now respawn');
       }
-      this.emergencyRespawnTimer = null; // Clear reference after use
     });
+    
+    // NO EMERGENCY TIMERS - RespawnManager handles all retries and fallbacks
+    console.log('💀 Death handling complete - RespawnManager will handle respawn');
   }
 
   /**
@@ -1768,16 +1797,9 @@ export class GameScene extends Phaser.Scene {
     
     // Clear all death timers
     if ((this as any).respawnTimer) {
-      console.log('   Clearing existing respawn timer');
+      console.log('   Clearing respawn timer');
       (this as any).respawnTimer.remove();
       (this as any).respawnTimer = null;
-    }
-    
-    // Clear emergency respawn timer
-    if (this.emergencyRespawnTimer) {
-      console.log('   Clearing emergency respawn timer');
-      this.emergencyRespawnTimer.destroy();
-      this.emergencyRespawnTimer = null;
     }
     
     // Reset flags
@@ -1868,7 +1890,6 @@ export class GameScene extends Phaser.Scene {
     
     // Auto-respawn countdown (5 seconds total)
     let timeLeft = 5;
-    // Show initial countdown immediately
     countdownText.setText(`Auto-respawn in ${timeLeft}s`);
     
     const countdownTimer = this.time.addEvent({
@@ -1876,7 +1897,6 @@ export class GameScene extends Phaser.Scene {
       repeat: 4,
       callback: () => {
         timeLeft--;
-        // Check if death container and countdown text still exist
         if ((this as any).deathContainer && countdownText && countdownText.scene) {
           if (timeLeft > 0) {
             countdownText.setText(`Auto-respawn in ${timeLeft}s`);
@@ -1903,16 +1923,9 @@ export class GameScene extends Phaser.Scene {
     } catch (error) {
       console.error('❌ Failed to create death screen:', error);
       console.error('Error details:', error);
-      // Emergency recovery - force respawn after delay
+      // RespawnManager will handle recovery
       this.isPlayerDead = true;
-      this.time.delayedCall(5000, () => {
-        console.warn('⚠️ Emergency respawn due to death screen failure');
-        this.handleLocalPlayerRespawn({
-          playerId: this.networkSystem.getSocket()?.id,
-          position: this.getTeamSpawnPosition(),
-          health: 100
-        });
-      });
+      console.log('💀 Death screen failed but RespawnManager will handle respawn');
     }
   }
 
@@ -1926,63 +1939,149 @@ export class GameScene extends Phaser.Scene {
       y: 135  // Middle of the map
     };
   }
+  
+  /**
+   * Validate player state for debugging
+   */
+  private validatePlayerState(): boolean {
+    const errors: string[] = [];
+    
+    // Check death state consistency
+    if (this.isPlayerDead && this.inputSystem && !this.inputSystem.isPlayerDeadState()) {
+      errors.push('Death state mismatch: GameScene dead but InputSystem alive');
+    }
+    
+    if (!this.isPlayerDead && this.inputSystem && this.inputSystem.isPlayerDeadState()) {
+      errors.push('Death state mismatch: GameScene alive but InputSystem dead');
+    }
+    
+    // Check position validity
+    if (this.playerPosition.x < 0 || this.playerPosition.x > 480 ||
+        this.playerPosition.y < 0 || this.playerPosition.y > 270) {
+      errors.push(`Invalid position: ${this.playerPosition.x}, ${this.playerPosition.y}`);
+    }
+    
+    // Check sprite visibility
+    if (!this.isPlayerDead && this.playerSprite && !this.playerSprite.visible) {
+      errors.push('Player alive but sprite invisible');
+    }
+    
+    if (this.isPlayerDead && this.playerSprite && this.playerSprite.visible) {
+      errors.push('Player dead but sprite visible');
+    }
+    
+    // Check client prediction state
+    if (!this.isPlayerDead && this.clientPrediction && !(this.clientPrediction as any).enabled) {
+      errors.push('Player alive but client prediction disabled');
+    }
+    
+    // Log results
+    if (errors.length > 0) {
+      console.error('❌ State validation failed:');
+      errors.forEach(error => console.error('  - ' + error));
+      return false;
+    } else {
+      console.log('✅ State validation passed');
+      return true;
+    }
+  }
+  
+  /**
+   * Reset all systems to clean state (emergency recovery)
+   */
+  private resetAllSystems(): void {
+    console.log('🔧 RESETTING ALL SYSTEMS TO CLEAN STATE');
+    
+    // Force alive state
+    this.isPlayerDead = false;
+    (this as any).canRespawn = false;
+    
+    // Clean up any death UI
+    this.forceCleanupDeathState();
+    this.hideDeathScreen();
+    
+    // Reset position to team spawn
+    const spawnPos = this.getTeamSpawnPosition();
+    this.playerPosition = spawnPos;
+    console.log('📍 Reset position to:', spawnPos);
+    
+    // Reset sprite
+    if (this.playerSprite) {
+      this.playerSprite.setPosition(spawnPos.x, spawnPos.y);
+      this.playerSprite.setVisible(true);
+      this.playerSprite.setAlpha(1);
+      this.playerSprite.clearTint();
+      this.playerSprite.setScale(1);
+      console.log('✅ Sprite reset');
+    }
+    
+    // Reset input system
+    if (this.inputSystem) {
+      this.inputSystem.setPlayerDead(false);
+      (this.inputSystem as any).lastInputState = null;
+      (this.inputSystem as any).respawnKeyWasPressed = false;
+      console.log('✅ Input system reset');
+    }
+    
+    // Reset client prediction
+    if (this.clientPrediction) {
+      this.clientPrediction.reset(spawnPos);
+      (this.clientPrediction as any).enabled = true;
+      console.log('✅ Client prediction reset');
+    }
+    
+    // Reset vision
+    if (this.visionRenderer) {
+      // Vision will update with next game state
+      console.log('✅ Vision system will update with next game state');
+    }
+    
+    // Reset health
+    if (this.weaponUI) {
+      this.weaponUI.updateHealth(100);
+      console.log('✅ Health reset to 100');
+    }
+    
+    // Reset camera zoom and effects only (position stays fixed)
+    if (this.cameras && this.cameras.main) {
+      const camera = this.cameras.main;
+      
+      // Reset zoom to default
+      camera.setZoom(1);
+      
+      // Reset any alpha or effects
+      camera.setAlpha(1);
+      camera.resetFX();
+      
+      console.log('✅ Camera zoom and effects reset');
+    }
+    
+    console.log('✅ ALL SYSTEMS RESET - Player restored to clean state');
+    
+    // Validate the reset worked
+    this.validatePlayerState();
+  }
 
   /**
-   * Request respawn from backend
+   * Request respawn - delegate to RespawnManager
+   * SIMPLIFIED: RespawnManager handles all retries and fallbacks
    */
   public requestRespawn(): void {
-    console.log('🔄 Requesting respawn from backend');
-    console.log('   isPlayerDead:', this.isPlayerDead);
-    console.log('   canRespawn:', (this as any).canRespawn);
-    console.log('   socketId:', this.networkSystem.getSocket()?.id);
+    console.log('🔄 Respawn requested');
     
-    // Make sure we're actually dead before requesting respawn
-    if (!this.isPlayerDead) {
-      console.warn('⚠️ Cannot respawn - player is not dead');
-      return;
-    }
-    
-    // Skip cooldown check if force respawning
-    if (!(this as any).canRespawn) {
-      console.warn('⚠️ Respawn cooldown active, but attempting anyway...');
-      // Don't return - try anyway in case backend allows it
-    }
-    
-    console.log('🔄 Sending player:respawn event to backend');
-    this.networkSystem.emit('player:respawn');
-    
-    // Also try alternative event names in case backend expects different format
-    this.networkSystem.emit('respawn');
-    this.networkSystem.emit('player_respawn');
-    
-    // Failsafe: If backend doesn't send proper respawn event within 3 seconds,
-    // force clear the death screen (backend might just update game state)
-    this.time.delayedCall(3000, () => {
-      if (this.isPlayerDead) {
-        console.warn('⚠️ No backend:player:respawned event received after 3 seconds');
-        
-        // Check if our health was restored in game state (backend might update without event)
-        const currentHealth = (this.weaponUI as any).health || 0;
-        console.log('   Current health:', currentHealth);
-        
-        if (currentHealth > 0) {
-          console.log('✅ Health restored to', currentHealth, '- backend updated state without event');
-          this.handleLocalPlayerRespawn({
-            playerId: this.networkSystem.getSocket()?.id,
-            position: this.playerPosition,
-            health: currentHealth
-          });
-        } else {
-          console.log('🚨 CRITICAL: Backend not responding, forcing local respawn');
-          // Force respawn locally to prevent permanent ghost state
-          this.handleLocalPlayerRespawn({
-            playerId: this.networkSystem.getSocket()?.id,
-            position: this.getTeamSpawnPosition(),
-            health: 100
-          });
-        }
+    // Delegate to RespawnManager for bulletproof handling
+    if (this.respawnManager) {
+      this.respawnManager.requestRespawn();
+    } else {
+      console.error('❌ RespawnManager not initialized!');
+      // Emergency fallback - try direct backend request
+      if (this.isPlayerDead && this.networkSystem) {
+        console.log('🚨 EMERGENCY: Sending respawn request without RespawnManager');
+        this.networkSystem.emit('player:respawn');
+        this.networkSystem.emit('respawn');
+        this.networkSystem.emit('player_respawn');
       }
-    });
+    }
   }
 
   /**
@@ -2005,7 +2104,7 @@ export class GameScene extends Phaser.Scene {
       console.warn('⚠️ No death container to hide');
     }
     
-    // Clear respawn timer
+    // Clear respawn timer (including auto-respawn countdown)
     const respawnTimer = (this as any).respawnTimer;
     if (respawnTimer) {
       respawnTimer.remove();
@@ -2017,82 +2116,80 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
-   * Handle local player respawn - restore input and hide death screen
+   * Handle local player respawn - delegate to RespawnManager
+   * SIMPLIFIED: RespawnManager handles all the complex logic
    */
   private handleLocalPlayerRespawn(respawnData: any): void {
-    console.log('🔄 handleLocalPlayerRespawn called with:', respawnData);
+    console.log('🔄 handleLocalPlayerRespawn called:', respawnData);
     
-    // CRITICAL: Reset ALL death-related state
-    this.isPlayerDead = false;
-    (this as any).canRespawn = false; // Reset respawn flag
-    
-    // Cancel emergency respawn timer if it exists
-    if (this.emergencyRespawnTimer) {
-      console.log('🧹 Cancelling emergency respawn timer on respawn');
-      this.emergencyRespawnTimer.destroy();
-      this.emergencyRespawnTimer = null;
+    // Validate we're actually dead
+    if (!this.isPlayerDead) {
+      console.warn('⚠️ Respawn received but player not dead - ignoring');
+      return;
     }
     
-    // Force cleanup death UI (in case it's stuck)
-    this.forceCleanupDeathState();
+    // Validate scene is active
+    if (!this.scene || !this.scene.isActive()) {
+      console.warn('⚠️ Scene not active - ignoring respawn');
+      return;
+    }
     
-    // Validate and set respawn position
-    let finalPosition: { x: number, y: number };
-    if (respawnData.position && 
-        !(respawnData.position.x === 0 && respawnData.position.y === 0)) {
-      finalPosition = { x: respawnData.position.x, y: respawnData.position.y };
-      console.log('📍 Using provided respawn position:', finalPosition);
+    // Delegate to RespawnManager for bulletproof handling
+    if (this.respawnManager) {
+      this.respawnManager.handleRespawnSuccess(respawnData);
     } else {
-      finalPosition = this.getTeamSpawnPosition();
-      console.warn('⚠️ Invalid or missing position, using team spawn:', finalPosition);
+      console.error('❌ RespawnManager not initialized! Attempting direct respawn...');
+      // Emergency fallback if RespawnManager somehow doesn't exist
+      this.forceDirectRespawn(respawnData);
     }
+  }
+  
+  /**
+   * Emergency direct respawn if RespawnManager fails
+   */
+  private forceDirectRespawn(respawnData: any): void {
+    console.log('🚨 EMERGENCY: Direct respawn without RespawnManager');
     
-    this.playerPosition = finalPosition;
+    // Reset death state
+    this.isPlayerDead = false;
+    (this as any).canRespawn = false;
     
-    // Force sprite position update
+    // Clean up death UI
+    this.forceCleanupDeathState();
+    this.hideDeathScreen();
+    
+    // Reset position
+    const position = respawnData.position || this.getTeamSpawnPosition();
+    this.playerPosition = position;
+    
+    // Reset sprite
     if (this.playerSprite) {
-      this.playerSprite.setPosition(finalPosition.x, finalPosition.y);
+      this.playerSprite.setPosition(position.x, position.y);
       this.playerSprite.setVisible(true);
       this.playerSprite.setAlpha(1);
     }
     
-    // CRITICAL: Hard reset client prediction to prevent rubber banding
+    // Reset systems
     if (this.clientPrediction) {
-      this.clientPrediction.reset(finalPosition);
-      // Re-enable prediction
+      this.clientPrediction.reset(position);
       (this.clientPrediction as any).enabled = true;
-      console.log('✅ Client prediction reset and re-enabled');
     }
     
-    // Force vision system reset if available
-    if ((this as any).visionRenderer) {
-      // Vision renderer needs to know our new position
-      (this as any).visionRenderer.updatePlayerPosition?.(finalPosition);
-    }
-    
-    // Re-enable input
     if (this.inputSystem) {
       this.inputSystem.setPlayerDead(false);
-      // Force input state reset to clear any stuck states
-      (this.inputSystem as any).lastInputState = null;
-      console.log('✅ Input system re-enabled and reset');
     }
     
-    // Hide death screen (redundant but safe)
-    console.log('🎭 Hiding death screen');
-    this.hideDeathScreen();
-    
-    // Show invulnerability effect if specified
-    if (respawnData.invulnerableUntil) {
-      this.showInvulnerabilityEffect(respawnData.invulnerableUntil);
-    }
-    
-    // Update player health to full
     if (this.weaponUI) {
       this.weaponUI.updateHealth(100);
     }
     
-    console.log('✨ Local player respawned successfully at', finalPosition);
+    // Reset camera zoom and effects only (position stays fixed)
+    if (this.cameras && this.cameras.main) {
+      const camera = this.cameras.main;
+      camera.setZoom(1);
+      camera.setAlpha(1);
+      camera.resetFX();
+    }
   }
 
   /**
@@ -2365,11 +2462,11 @@ export class GameScene extends Phaser.Scene {
     this.isMatchEnding = false;
     this.matchStartTime = 0;
     
-    // Clean up emergency respawn timer
-    if (this.emergencyRespawnTimer) {
-      console.log('🧹 Cleaning up emergency respawn timer on shutdown');
-      this.emergencyRespawnTimer.destroy();
-      this.emergencyRespawnTimer = null;
+    // Clean up RespawnManager
+    if (this.respawnManager) {
+      console.log('🧹 Cleaning up RespawnManager on shutdown');
+      this.respawnManager.destroy();
+      (this.respawnManager as any) = null;
     }
     
     // Clean up socket listeners

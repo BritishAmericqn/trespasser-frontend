@@ -70,7 +70,7 @@ export class MenuScene extends Phaser.Scene {
     const directButtonBg = this.add.graphics();
     directButtonBg.fillStyle(0x006600); // Green background for immediate action
     directButtonBg.fillRect(-buttonWidth/2, -5 - primaryHeight/2, buttonWidth, primaryHeight);
-    const playNowButton = this.add.text(0, -5, 'PLAY NOW', {
+    const playNowButton = this.add.text(0, -5, 'QUICKPLAY', {
       fontSize: '14px',
       color: '#ffffff',
       fontFamily: 'monospace'

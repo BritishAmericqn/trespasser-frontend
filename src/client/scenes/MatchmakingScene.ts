@@ -362,18 +362,8 @@ export class MatchmakingScene extends Phaser.Scene {
       buttonHeight
     );
     
-    // 🧪 TEST FORCE MATCH BUTTON (for development/testing)
-    const testMatchButton = this.add.text(GAME_CONFIG.GAME_WIDTH / 2 - 80, GAME_CONFIG.GAME_HEIGHT - 30, '🧪 FORCE MATCH', {
-      fontSize: '10px',
-      color: '#ffffff',
-      backgroundColor: '#ff6600',
-      padding: { x: 10, y: 4 },
-      fontFamily: 'monospace'
-    }).setOrigin(0.5);
-
-    this.setupButton(testMatchButton, '#ff6600', '#ff8833', () => this.forceCreateMatch());
-
-    this.cancelButton = this.add.text(GAME_CONFIG.GAME_WIDTH / 2 + 80, GAME_CONFIG.GAME_HEIGHT - 30, 'CANCEL', {
+    // CANCEL button - centered now that FORCE MATCH is removed
+    this.cancelButton = this.add.text(GAME_CONFIG.GAME_WIDTH / 2, GAME_CONFIG.GAME_HEIGHT - 30, 'CANCEL', {
       fontSize: '12px',
       color: '#ffffff',
       fontFamily: 'monospace'
@@ -488,33 +478,6 @@ export class MatchmakingScene extends Phaser.Scene {
     
     this.stopLoadingAnimation();
     this.scene.start('LobbyMenuScene');
-  }
-
-  // 🧪 FORCE CREATE MATCH (for development/testing)
-  private forceCreateMatch(): void {
-    console.log('🧪 TEST: Force creating match...');
-    
-    const socket = this.networkSystem.getSocket();
-    if (socket) {
-      // Try multiple approaches to force a match
-      socket.emit('admin:force_create_match', { 
-        gameMode: this.gameMode,
-        reason: 'test_force_match_button'
-      });
-      
-      // Also try the standard create private lobby (which might work better)
-      socket.emit('create_private_lobby', {
-        gameMode: this.gameMode,
-        password: '', // No password
-        maxPlayers: 1, // Allow single player for testing
-        forceStart: true
-      });
-      
-      // Show feedback to user
-      this.statusText.setText('🧪 Force creating test match...');
-    } else {
-      console.error('❌ No socket connection for force create match');
-    }
   }
 
   shutdown(): void {

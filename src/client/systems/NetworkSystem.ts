@@ -430,6 +430,60 @@ export class NetworkSystem implements IGameSystem {
         this.scene.events.emit('backend:player:killed', data);
       }
     });
+    
+    // CRITICAL: Player death event routing - multiple names for compatibility
+    this.socket.on('player_died', (data: any) => {
+      if (this.connectionState === ConnectionState.AUTHENTICATED) {
+        console.log('📥 RESPAWN FIX: player_died event received:', data.playerId);
+        this.scene.events.emit('backend:player:died', data);
+      }
+    });
+    
+    this.socket.on('player:died', (data: any) => {
+      if (this.connectionState === ConnectionState.AUTHENTICATED) {
+        console.log('📥 RESPAWN FIX: player:died event received:', data.playerId);
+        this.scene.events.emit('backend:player:died', data);
+      }
+    });
+    
+    // Backend might already use this format
+    this.socket.on('backend:player:died', (data: any) => {
+      if (this.connectionState === ConnectionState.AUTHENTICATED) {
+        console.log('📥 RESPAWN FIX: backend:player:died event received:', data.playerId);
+        this.scene.events.emit('backend:player:died', data);
+      }
+    });
+    
+    // CRITICAL: Player respawn event routing - multiple names for compatibility
+    this.socket.on('player_respawned', (data: any) => {
+      if (this.connectionState === ConnectionState.AUTHENTICATED) {
+        console.log('📥 RESPAWN FIX: player_respawned event received:', data.playerId);
+        this.scene.events.emit('backend:player:respawned', data);
+      }
+    });
+    
+    this.socket.on('player:respawned', (data: any) => {
+      if (this.connectionState === ConnectionState.AUTHENTICATED) {
+        console.log('📥 RESPAWN FIX: player:respawned event received:', data.playerId);
+        this.scene.events.emit('backend:player:respawned', data);
+      }
+    });
+    
+    // Backend might already use this format
+    this.socket.on('backend:player:respawned', (data: any) => {
+      if (this.connectionState === ConnectionState.AUTHENTICATED) {
+        console.log('📥 RESPAWN FIX: backend:player:respawned event received:', data.playerId);
+        this.scene.events.emit('backend:player:respawned', data);
+      }
+    });
+    
+    // Additional fallback for respawn response
+    this.socket.on('respawn_success', (data: any) => {
+      if (this.connectionState === ConnectionState.AUTHENTICATED) {
+        console.log('📥 RESPAWN FIX: respawn_success event received:', data.playerId);
+        this.scene.events.emit('backend:player:respawned', data);
+      }
+    });
 
     this.socket.on('wall:damaged', (data: any) => {
       if (this.connectionState === ConnectionState.AUTHENTICATED) {
