@@ -348,11 +348,6 @@ export class GameScene extends Phaser.Scene {
     // Create kill counter HUD if in a match
     this.createKillCounterHUD();
     
-    // Create debug UI if in development
-    if (process.env.NODE_ENV !== 'production') {
-      this.createDebugUI();
-    }
-    
     // Set up client prediction callback
     this.clientPrediction.setPositionCallback((pos) => {
       this.playerPosition.x = pos.x;
@@ -426,13 +421,6 @@ export class GameScene extends Phaser.Scene {
         password: ''
       };
     }
-
-    // Add debug instructions to UI
-    const debugText = this.add.text(5, GAME_CONFIG.GAME_HEIGHT - 20, 
-      'Debug: \\ - admin auth, F - toggle fog', {
-      fontSize: '7px',
-      color: '#666666'
-    }).setOrigin(0, 1);
 
     // Add keyboard shortcut to manually request game state (for debugging)
     this.input.keyboard?.on('keydown-R', () => {
@@ -1430,8 +1418,6 @@ export class GameScene extends Phaser.Scene {
       }
     });
 
-    // All debug functionality removed except F key fog toggle
-    
     // EMERGENCY RESPAWN: R key to force respawn if stuck
     this.input.keyboard?.on('keydown-R', () => {
       if (this.isPlayerDead) {
@@ -1457,135 +1443,6 @@ export class GameScene extends Phaser.Scene {
       }
     });
     
-    // DEBUG: Test match end flow (Development only)
-    // SENIOR DEV REVIEW: Using backend debug events instead of local simulation
-    if (process.env.NODE_ENV !== 'production') {
-      this.input.keyboard?.on('keydown-M', () => {
-        console.log('🧪 DEBUG: Requesting backend match end (M key pressed)');
-        const socket = this.networkSystem.getSocket();
-        if (socket && socket.connected) {
-          // Try multiple event names that backend might expect
-          const debugData = { 
-            reason: 'Frontend M key test',
-            timestamp: Date.now()
-          };
-          
-          // Try the documented event name
-          socket.emit('debug:trigger_match_end', debugData);
-          console.log('📤 Sent debug:trigger_match_end to backend');
-          
-          // Also try alternative event names the backend might use
-          socket.emit('debug:triggerMatchEnd', debugData);
-          socket.emit('debug_trigger_match_end', debugData);
-          
-          // Set a timeout to check if backend responded
-          let gotResponse = false;
-          
-          // Listen for any response
-          const responseHandler = () => {
-            gotResponse = true;
-          };
-          socket.once('debug:match_end_triggered', responseHandler);
-          socket.once('debug:match_end_failed', responseHandler);
-          
-          this.time.delayedCall(2000, () => {
-            if (!gotResponse) {
-              console.warn('⚠️ No response from backend after 2 seconds.');
-              console.log('💡 Backend claims to have implemented the handler but is not responding.');
-              console.log('💡 Possible issues:');
-              console.log('   1. Backend handler not actually deployed');
-              console.log('   2. Event name mismatch');
-              console.log('   3. Backend handler has a bug');
-              console.log('🔍 Trying to force match end via other methods...');
-              
-              // Try sending a fake high kill count
-              socket.emit('player:update', {
-                kills: 50,
-                timestamp: Date.now()
-              });
-            }
-          });
-        } else {
-          console.error('❌ Cannot trigger debug match end - not connected to backend');
-        }
-      });
-      
-      this.input.keyboard?.on('keydown-N', () => {
-        console.log('🧪 DEBUG: Requesting match state info (N key pressed)');
-        const socket = this.networkSystem.getSocket();
-        if (socket && socket.connected) {
-          // Try multiple event names
-          socket.emit('debug:request_match_state');
-          socket.emit('debug:requestMatchState');
-          socket.emit('debug_request_match_state');
-          console.log('📤 Sent debug match state requests to backend');
-          
-          // Also show local state as fallback
-          this.time.delayedCall(500, () => {
-            if (this.currentGameState) {
-              let redKills = 0, blueKills = 0;
-              Object.values(this.currentGameState.players || {}).forEach((p: any) => {
-                if (p.team === 'red') redKills += p.kills || 0;
-                else if (p.team === 'blue') blueKills += p.kills || 0;
-              });
-              
-              console.log('📊 LOCAL State (Frontend View):');
-              console.log(`  Kill Score: RED ${redKills}/${this.killTarget} vs BLUE ${blueKills}/${this.killTarget}`);
-              console.log(`  Players: ${Object.keys(this.currentGameState.players || {}).length}`);
-              console.log(`  Match Ending: ${this.isMatchEnding}`);
-              
-              // Show individual player data
-              Object.values(this.currentGameState.players || {}).forEach((p: any) => {
-                if (p.kills > 0 || p.deaths > 0) {
-                  console.log(`  Player ${p.id?.substring(0, 8)} (${p.team}): ${p.kills || 0} kills, ${p.deaths || 0} deaths`);
-                }
-              });
-            }
-            
-            console.log('💡 If no backend response above, backend needs socket.on("debug:request_match_state")');
-          });
-        } else {
-          console.error('❌ Cannot request match state - not connected to backend');
-        }
-      });
-      
-      // Listen for debug responses from backend
-      const socket = this.networkSystem.getSocket();
-      if (socket) {
-        socket.on('debug:match_end_triggered', (data: any) => {
-          console.log('✅ Backend triggered match end successfully');
-          if (data.redKills !== undefined && data.blueKills !== undefined) {
-            console.log(`  Final scores - RED: ${data.redKills}, BLUE: ${data.blueKills}`);
-          }
-        });
-        
-        socket.on('debug:match_end_failed', (error: any) => {
-          console.error('❌ Debug match end failed:', error.reason);
-          console.log('  Hint: Match must be in "playing" status');
-        });
-        
-        socket.on('debug:match_state', (state: any) => {
-          console.log('📊 Current Match State from Backend:');
-          console.log(`  Status: ${state.status}`);
-          console.log(`  Kill Score: RED ${state.redKills}/${state.killTarget} vs BLUE ${state.blueKills}/${state.killTarget}`);
-          console.log(`  Players: ${state.playerCount}`);
-          
-          if (state.players && state.players.length > 0) {
-            console.log('\n  Player Details:');
-            state.players.forEach((p: any) => {
-              const status = p.isAlive ? '✅' : '💀';
-              console.log(`    ${status} ${p.playerName} (${p.team}): ${p.kills} kills, ${p.deaths} deaths`);
-            });
-          }
-          
-          if (state.matchStartTime) {
-            const duration = Math.floor((Date.now() - state.matchStartTime) / 1000);
-            console.log(`\n  Match Duration: ${Math.floor(duration / 60)}:${(duration % 60).toString().padStart(2, '0')}`);
-          }
-        });
-      }
-    }
-
     // ===== PLAYER LIFECYCLE EVENT HANDLERS =====
     
     // Handle player death events (new death system)
@@ -2669,56 +2526,6 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  /**
-   * Create debug UI showing available test keys
-   */
-  private createDebugUI(): void {
-    const debugContainer = this.add.container(10, GAME_CONFIG.GAME_HEIGHT - 80);
-    debugContainer.setDepth(95);
-    debugContainer.setScrollFactor(0);
-    
-    // Background
-    const bg = this.add.graphics();
-    bg.fillStyle(0x000000, 0.7);
-    bg.fillRect(0, 0, 200, 70);
-    debugContainer.add(bg);
-    
-    // Title
-    const title = this.add.text(5, 5, '🧪 DEBUG CONTROLS', {
-      fontSize: '10px',
-      color: '#ffff00',
-      fontFamily: 'monospace',
-      fontStyle: 'bold'
-    });
-    debugContainer.add(title);
-    
-    // Instructions
-    const instructions = [
-      'M - Test match end (50 kills)',
-      'N - Simulate backend event', 
-      'F - Toggle fog of war'
-    ];
-    
-    instructions.forEach((text, i) => {
-      const line = this.add.text(5, 20 + (i * 12), text, {
-        fontSize: '9px',
-        color: '#00ff00',
-        fontFamily: 'monospace'
-      });
-      debugContainer.add(line);
-    });
-    
-    // Make it semi-transparent and pulsing to indicate debug mode
-    this.tweens.add({
-      targets: debugContainer,
-      alpha: { from: 0.8, to: 1 },
-      duration: 1000,
-      yoyo: true,
-      repeat: -1,
-      ease: 'Sine.easeInOut'
-    });
-  }
-  
   /**
    * Create kill counter HUD for match progress
    */
