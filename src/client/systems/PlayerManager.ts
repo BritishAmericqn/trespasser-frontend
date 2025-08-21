@@ -28,6 +28,7 @@ export class PlayerManager {
   private visionRenderer: VisionRenderer | null = null;
   private partialVisibilityEnabled: boolean = true; // Enable by default
   private assetManager: AssetManager;
+  private playerTeamCache: Map<string, 'red' | 'blue'> = new Map();
   
   // Visual constants
   private readonly PLAYER_SIZE = 16;
@@ -387,6 +388,7 @@ export class PlayerManager {
     
     // Validate and log team assignment - Try multiple sources for team data
     let team: 'red' | 'blue' = 'blue';
+    const playerId = (state as any).id;
     
     // Priority 1: Direct team field
     if (state.team) {
@@ -395,16 +397,26 @@ export class PlayerManager {
     // Priority 2: Check loadout for team data
     else if ((state as any).loadout?.team) {
       team = (state as any).loadout.team;
-      console.log(`🎨 Using team from loadout for player ${(state as any).id}: ${team}`);
+      console.log(`🎨 Using team from loadout for player ${playerId}: ${team}`);
     }
-    // Priority 3: Try to infer from spawn position (temporary workaround)
+    // Priority 3: Check cache from previous updates
+    else if (playerId && this.playerTeamCache.has(playerId)) {
+      team = this.playerTeamCache.get(playerId)!;
+      console.log(`📋 Using cached team for player ${playerId}: ${team}`);
+    }
+    // Priority 4: Try to infer from spawn position (temporary workaround)
     else if (state.position) {
       // Red team typically spawns on left (x < 240), blue on right (x >= 240)
       team = state.position.x < 240 ? 'red' : 'blue';
-      console.warn(`⚠️ Player ${(state as any).id} missing team data, inferring ${team} from position (x=${state.position.x})`);
+      console.warn(`⚠️ Player ${playerId} missing team data, inferring ${team} from position (x=${state.position.x})`);
     }
     else {
-      console.error(`❌ Player ${(state as any).id} has no team data or position to infer from, defaulting to blue`);
+      console.error(`❌ Player ${playerId} has no team data or position to infer from, defaulting to blue`);
+    }
+    
+    // Store team in cache for future use
+    if (playerId) {
+      this.playerTeamCache.set(playerId, team);
     }
     
     // Team assignment occurs silently
