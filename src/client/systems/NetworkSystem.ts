@@ -2,6 +2,7 @@ import { io, Socket } from 'socket.io-client';
 import { IGameSystem } from '../../../shared/interfaces/IGameSystem';
 import { EVENTS } from '../../../shared/constants/index';
 import { InputState } from './InputSystem';
+import { TimeSync } from './TimeSync';
 
 // Connection states enum
 export enum ConnectionState {
@@ -36,6 +37,10 @@ export class NetworkSystem implements IGameSystem {
   private connectionInProgress: boolean = false; // Prevent multiple concurrent connection attempts
   private lastGameStateLog: number = 0;
   private firstWallsForwarded: boolean = false;
+  private timeSync: TimeSync | null = null;
+  private isActivePlayer: boolean = false;
+  private joinAttempts: number = 0;
+  private maxJoinAttempts: number = 3;
 
   constructor(scene: Phaser.Scene) {
     this.scene = scene;
@@ -62,6 +67,12 @@ export class NetworkSystem implements IGameSystem {
     this.scene.events.off('weapon:reload');
     this.scene.events.off('ads:toggle');
     
+    // Destroy TimeSync
+    if (this.timeSync) {
+      this.timeSync.destroy();
+      this.timeSync = null;
+    }
+    
     // Disconnect socket
     if (this.socket) {
       console.error('🔴 DESTROYING SOCKET CONNECTION - This will disconnect from backend!');
@@ -75,6 +86,7 @@ export class NetworkSystem implements IGameSystem {
     
     this.connectionState = ConnectionState.DISCONNECTED;
     this.isConnected = false;
+    this.isActivePlayer = false;
   }
 
   // Public method to connect to a specific server
@@ -151,6 +163,10 @@ export class NetworkSystem implements IGameSystem {
 
       // Setup ALL listeners BEFORE connecting
       this.setupSocketListeners();
+      
+      // Initialize TimeSync with the socket
+      this.timeSync = new TimeSync(this.socket);
+      console.log('⏰ TimeSync initialized');
       
       // Handle authentication if needed
           this.socket.on('connect', () => {
@@ -365,6 +381,34 @@ export class NetworkSystem implements IGameSystem {
     this.socket.on('error', (message: string) => {
       this.setConnectionState(ConnectionState.FAILED);
       this.scene.events.emit('network:connectionError', message);
+    });
+
+    // Player join confirmation handlers
+    this.socket.on('player:join:success', (data: any) => {
+      console.log('✅ Successfully joined as active player:', data);
+      this.isActivePlayer = true;
+      this.joinAttempts = 0;
+      this.scene.events.emit('player:join:confirmed', data);
+    });
+    
+    this.socket.on('player:join:failed', (data: any) => {
+      console.error('❌ Join failed:', data.reason);
+      this.isActivePlayer = false;
+      this.scene.events.emit('player:join:rejected', data);
+      
+      // Retry logic with exponential backoff
+      if (this.joinAttempts < this.maxJoinAttempts) {
+        this.joinAttempts++;
+        const retryDelay = 1000 * Math.pow(2, this.joinAttempts - 1); // 1s, 2s, 4s
+        console.log(`🔄 Retrying join (attempt ${this.joinAttempts}/${this.maxJoinAttempts}) in ${retryDelay}ms`);
+        
+        setTimeout(() => {
+          this.retryJoin();
+        }, retryDelay);
+      } else {
+        console.error('❌ Max join attempts reached. Player remains inactive.');
+        this.scene.events.emit('player:join:max_attempts', data);
+      }
     });
 
     // Listen for game state updates from server
@@ -745,5 +789,65 @@ export class NetworkSystem implements IGameSystem {
     } catch (error) {
       console.error(`Failed to emit ${event}:`, error);
     }
+  }
+  
+  /**
+   * Retry joining the game after a failure
+   */
+  private retryJoin(): void {
+    const gameScene = this.scene.game.scene.getScene('GameScene');
+    if (gameScene && gameScene.scene.isActive()) {
+      const loadout = this.scene.game.registry.get('playerLoadout');
+      const playerName = this.scene.game.registry.get('playerName');
+      
+      if (loadout) {
+        console.log('🔄 Retrying player:join with loadout');
+        this.emit('player:join', {
+          loadout: loadout,
+          playerName: playerName || `Player${Math.floor(Math.random() * 9999)}`,
+          timestamp: this.getServerTime()
+        });
+      } else {
+        console.error('❌ Cannot retry join - no loadout available');
+      }
+    } else {
+      console.warn('⚠️ Cannot retry join - GameScene not active');
+    }
+  }
+  
+  /**
+   * Get synchronized server time
+   */
+  getServerTime(): number {
+    return this.timeSync?.getServerTime() || Date.now();
+  }
+  
+  /**
+   * Get time synchronization offset
+   */
+  getTimeOffset(): number {
+    return this.timeSync?.getOffset() || 0;
+  }
+  
+  /**
+   * Check if time sync is healthy
+   */
+  isTimeSyncHealthy(): boolean {
+    return this.timeSync?.isHealthy() || false;
+  }
+  
+  /**
+   * Check if player is active (not observer)
+   */
+  isPlayerActive(): boolean {
+    return this.isActivePlayer;
+  }
+  
+  /**
+   * Reset join attempts (useful when changing scenes)
+   */
+  resetJoinAttempts(): void {
+    this.joinAttempts = 0;
+    this.isActivePlayer = false;
   }
 } 

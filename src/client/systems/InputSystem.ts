@@ -39,6 +39,7 @@ export class InputSystem implements IGameSystem {
   private sequence: number = 0;
   private networkTimer: number = 0;
   private readonly NETWORK_RATE = 1000 / 60; // 60 times per second (16.67ms)
+  private networkSystem: any = null; // Reference to NetworkSystem for time sync
   // Player state
   private playerPosition: { x: number; y: number } = { x: 240, y: 135 }; // Default center
   private playerRotation: number = 0; // Player's current rotation in radians
@@ -187,6 +188,12 @@ export class InputSystem implements IGameSystem {
   }
 
   initialize(): void {
+    // Get reference to NetworkSystem for time synchronization
+    this.networkSystem = (this.scene as any).networkSystem;
+    if (!this.networkSystem) {
+      console.warn('⚠️ InputSystem: NetworkSystem not available - timestamps will use local time');
+    }
+    
     // Set up keyboard input
     this.keys = this.scene.input.keyboard!.addKeys({
       w: Phaser.Input.Keyboard.KeyCodes.W,
@@ -355,8 +362,8 @@ export class InputSystem implements IGameSystem {
       this.pendingADSToggle = false;
     }
 
-    // Update timestamp
-    this.inputState.timestamp = Date.now();
+    // Update timestamp with synchronized server time
+    this.inputState.timestamp = this.networkSystem?.getServerTime ? this.networkSystem.getServerTime() : Date.now();
 
     // Reset press/release flags after processing
     this.inputState.mouse.leftPressed = false;
@@ -593,7 +600,7 @@ export class InputSystem implements IGameSystem {
         // Trigger reload instead of firing
         this.scene.events.emit('weapon:reload', {
           weaponType: weapon,
-          timestamp: Date.now()
+          timestamp: this.networkSystem?.getServerTime ? this.networkSystem.getServerTime() : Date.now()
         });
         return; // Don't fire, just reload
       }
@@ -623,7 +630,7 @@ export class InputSystem implements IGameSystem {
       targetPosition: targetPosition,
       direction: this.playerRotation, // Use stored rotation instead of recalculating
       isADS: this.isADS,
-      timestamp: Date.now(),
+      timestamp: this.networkSystem?.getServerTime ? this.networkSystem.getServerTime() : Date.now(),
       sequence: this.sequence++
     };
     
@@ -649,7 +656,7 @@ export class InputSystem implements IGameSystem {
     // Send ADS toggle event
     this.scene.events.emit('ads:toggle', {
       isADS: this.isADS,
-      timestamp: Date.now()
+      timestamp: this.networkSystem?.getServerTime ? this.networkSystem.getServerTime() : Date.now()
     });
   }
 
@@ -700,7 +707,7 @@ export class InputSystem implements IGameSystem {
       // Send reload event
       this.scene.events.emit('weapon:reload', {
         weaponType: weapon,
-        timestamp: Date.now()
+        timestamp: this.networkSystem?.getServerTime ? this.networkSystem.getServerTime() : Date.now()
       });
       
       console.log(`🔄 Reloading ${weapon}`);
@@ -722,7 +729,7 @@ export class InputSystem implements IGameSystem {
     this.scene.events.emit('weapon:switch', {
       fromWeapon,
       toWeapon,
-      timestamp: Date.now()
+      timestamp: this.networkSystem?.getServerTime ? this.networkSystem.getServerTime() : Date.now()
     });
     
     console.log(`🔄 Weapon switch: ${fromWeapon} → ${toWeapon}`);
@@ -764,7 +771,7 @@ export class InputSystem implements IGameSystem {
       direction: this.playerRotation,
       chargeLevel: this.grenadeChargeLevel, // Include charge level (1 for smoke/flash)
       isADS: false,
-      timestamp: Date.now(),
+      timestamp: this.networkSystem?.getServerTime ? this.networkSystem.getServerTime() : Date.now(),
       sequence: this.sequence++
     });
     

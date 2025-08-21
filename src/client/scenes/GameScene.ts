@@ -128,7 +128,13 @@ export class GameScene extends Phaser.Scene {
       return;
     }
     
-    console.log('GameScene: Using configured loadout:', this.playerLoadout);
+    console.log('🎮 GameScene: Using configured loadout:', this.playerLoadout);
+    console.log(`🎨 TEAM VERIFICATION: Player is on ${this.playerLoadout?.team?.toUpperCase()} team`);
+    
+    // Validate team is set correctly
+    if (!this.playerLoadout?.team || (this.playerLoadout.team !== 'red' && this.playerLoadout.team !== 'blue')) {
+      console.error('❌ Invalid team configuration detected! Team:', this.playerLoadout?.team);
+    }
   }
 
   create(): void {
@@ -267,10 +273,12 @@ export class GameScene extends Phaser.Scene {
 
     } else {
       // Normal spawn - create at default position
+      // CRITICAL: Use the team from our loadout - this is what the player selected
       const teamColor = this.playerLoadout?.team || 'blue'; // Fallback to blue if no team configured
       
       // Debug log to verify team assignment
-      console.log(`🎨 Creating local player with team: ${teamColor} (from loadout: ${this.playerLoadout?.team})`);
+      console.log(`🎨 LOCAL PLAYER SPRITE: Creating as ${teamColor} team (from loadout selection)`);
+      console.log(`🔍 Debug: playerLoadout.team = ${this.playerLoadout?.team}, using: ${teamColor}`);
       
       this.playerSprite = this.assetManager.createPlayer(
         this.playerPosition.x,
@@ -566,7 +574,7 @@ export class GameScene extends Phaser.Scene {
       this.networkSystem.emit('player:join', {
         loadout: finalLoadout,
         playerName: playerName,  // Backend expects this for display
-        timestamp: Date.now()
+        timestamp: this.networkSystem.getServerTime()
       });
       
       // For late joins, request spawn position now that scene is ready
@@ -1119,19 +1127,20 @@ export class GameScene extends Phaser.Scene {
                 }
               }
               
-              // Update team color if it doesn't match
-              if (myPlayerData.team && this.playerSprite) {
+              // Verify team color matches our loadout (trust frontend loadout over backend)
+              if (this.playerSprite && this.playerLoadout?.team) {
                 const currentTexture = this.playerSprite.texture.key;
-                const expectedTexture = myPlayerData.team === 'red' ? 'player_red' : 'player_blue';
+                const expectedTexture = this.playerLoadout.team === 'red' ? 'player_red' : 'player_blue';
                 
+                // ONLY update if our sprite doesn't match our loadout
                 if (currentTexture !== expectedTexture) {
-                  console.log(`🎨 Updating player sprite from ${currentTexture} to ${expectedTexture} (team: ${myPlayerData.team})`);
+                  console.log(`🎨 Correcting local player sprite to match loadout: ${currentTexture} → ${expectedTexture} (loadout team: ${this.playerLoadout.team})`);
                   this.playerSprite.setTexture(expectedTexture);
-                  
-                  // Also update our local loadout to match backend's team assignment
-                  if (this.playerLoadout) {
-                    this.playerLoadout.team = myPlayerData.team;
-                  }
+                }
+                
+                // Log if backend disagrees with our team
+                if (myPlayerData.team && myPlayerData.team !== this.playerLoadout.team) {
+                  console.warn(`⚠️ Backend thinks we're ${myPlayerData.team} but our loadout says ${this.playerLoadout.team}. Using loadout.`);
                 }
               }
               
@@ -1208,6 +1217,10 @@ export class GameScene extends Phaser.Scene {
         // Convert array to object format for PlayerManager
         const playersObj: { [key: string]: any } = {};
         gameState.visiblePlayers.forEach(player => {
+          // Debug log to check if team data is present
+          if (!player.team && player.id !== this.localPlayerId) {
+            console.warn(`⚠️ Backend missing team data for player ${player.id}`);
+          }
           playersObj[player.id] = player;
         });
         this.playerManager.updatePlayers(playersObj);
@@ -1507,6 +1520,49 @@ export class GameScene extends Phaser.Scene {
       // causing each kill to count twice
     });
     */
+    
+    // ===== PLAYER JOIN CONFIRMATION HANDLERS =====
+    
+    // Handle successful join confirmation
+    this.events.on('player:join:confirmed', (data: any) => {
+      console.log('✅ Player join confirmed:', data);
+      
+      // Store player ID if provided
+      if (data.playerId) {
+        this.localPlayerId = data.playerId;
+        this.setLocalPlayerId(data.playerId);
+      }
+      
+      // Enable input processing
+      if (this.inputSystem) {
+        console.log('🎮 Enabling input system for active player');
+        // Note: InputSystem doesn't have setActive method yet, but processes normally
+      }
+      
+      // Show success notification
+      if (this.notificationSystem) {
+        this.notificationSystem.success('Joined as active player', 3000);
+      }
+    });
+    
+    // Handle join rejection
+    this.events.on('player:join:rejected', (data: any) => {
+      console.error('❌ Player join rejected:', data);
+      // NetworkSystem handles retry logic internally
+    });
+    
+    // Handle max join attempts reached
+    this.events.on('player:join:max_attempts', (data: any) => {
+      console.error('❌ Max join attempts reached');
+      
+      // Disable the game and show error
+      if (this.notificationSystem) {
+        this.notificationSystem.error(
+          'Unable to join game as active player. You are in observer mode.',
+          10000
+        );
+      }
+    });
 
     // Handle new players joining
     this.events.on('network:playerJoined', (data: any) => {
@@ -1546,9 +1602,10 @@ export class GameScene extends Phaser.Scene {
           id: data.id,
           position: data.position,
           health: data.health || 100,
-          team: data.team || data.loadout?.team || 'blue'  // Try to get team from multiple sources
+          team: data.team || data.loadout?.team || 'blue',  // Try to get team from multiple sources
+          loadout: data.loadout  // Preserve loadout data for team fallback
         };
-        console.log(`🎨 New player ${data.id} joined with team: ${playerState.team}`);
+        console.log(`🎨 New player ${data.id} joined with team: ${playerState.team} (sources checked: direct=${data.team}, loadout=${data.loadout?.team})`);
         const playerMap = new Map();
         playerMap.set(data.id, playerState);
         this.playerManager.updatePlayers(playerMap);

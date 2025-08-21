@@ -480,7 +480,7 @@ export class ConfigureScene extends Phaser.Scene {
   }
 
   private selectTeam(team: 'red' | 'blue'): void {
-    console.log(`Selected team: ${team}`);
+    console.log(`🎮 TEAM SELECTION: Player selected ${team.toUpperCase()} team`);
     this.loadout.team = team;
     
     // Move selection indicator to the chosen team (updated positions)
@@ -490,6 +490,9 @@ export class ConfigureScene extends Phaser.Scene {
     
     // Update loadout display immediately
     this.updateSelectedLoadoutDisplay();
+    
+    // Log the complete loadout state
+    console.log(`📋 Current loadout after team selection:`, this.loadout);
   }
 
   private selectWeapon(category: 'primary' | 'secondary' | 'support', weaponId: string): void {

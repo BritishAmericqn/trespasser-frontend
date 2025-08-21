@@ -79,6 +79,9 @@ export class PlayerManager {
       this.lastSeenPositions.delete(playerId);
     }
     
+    // Clear team cache for this player
+    this.playerTeamCache.delete(playerId);
+    
     console.log(`✅ Player ${playerId} removed from PlayerManager`);
   }
 
@@ -266,6 +269,19 @@ export class PlayerManager {
   private updatePlayer(id: string, state: PlayerState): void {
     const sprite = this.visiblePlayers.get(id);
     if (!sprite) return;
+    
+    // Check if team has changed (should be rare but handle it)
+    if (state.team && state.team !== sprite.team) {
+      console.log(`🔄 Player ${id} team changed from ${sprite.team} to ${state.team}`);
+      
+      // Update the sprite texture to match new team
+      const newTexture = state.team === 'red' ? 'player_red' : 'player_blue';
+      sprite.body.setTexture(newTexture);
+      sprite.team = state.team;
+      
+      // Update cache
+      this.playerTeamCache.set(id, state.team);
+    }
 
     // Update position (could add interpolation here)
     sprite.container.setPosition(state.position.x, state.position.y);
@@ -369,10 +385,31 @@ export class PlayerManager {
   private createPlayerSprite(state: PlayerState): PlayerSprite {
     const container = this.scene.add.container(state.position.x, state.position.y);
     
-    // Validate and log team assignment
-    const team = state.team || 'blue';
-    if (!state.team) {
-      console.warn(`⚠️ Player ${(state as any).id} missing team data, defaulting to blue`);
+    // Validate and log team assignment - Try multiple sources for team data
+    let team: 'red' | 'blue' = 'blue';
+    
+    // Priority 1: Direct team field
+    if (state.team) {
+      team = state.team;
+    }
+    // Priority 2: Check loadout for team data
+    else if ((state as any).loadout?.team) {
+      team = (state as any).loadout.team;
+      console.log(`🎨 Using team from loadout for player ${(state as any).id}: ${team}`);
+    }
+    // Priority 3: Try to infer from spawn position (temporary workaround)
+    else if (state.position) {
+      // Red team typically spawns on left (x < 240), blue on right (x >= 240)
+      team = state.position.x < 240 ? 'red' : 'blue';
+      console.warn(`⚠️ Player ${(state as any).id} missing team data, inferring ${team} from position (x=${state.position.x})`);
+    }
+    else {
+      console.error(`❌ Player ${(state as any).id} has no team data or position to infer from, defaulting to blue`);
+    }
+    
+    // Log team assignment for debugging
+    if (Math.random() < 0.1) { // Reduce log spam - only log 10% of the time
+      console.log(`🎨 Creating sprite for player ${playerId} with team: ${team}`);
     }
     
     // Use real player sprite (right-handed)
