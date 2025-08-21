@@ -116,7 +116,7 @@ export class LobbyStateManager {
       console.log('❌ Match start cancelled:', data.reason);
       this.updateFromPartial({
         status: 'waiting',
-        countdown: null
+        countdown: undefined
       });
     });
 

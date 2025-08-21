@@ -48,11 +48,11 @@ export class MatchResultsScene extends Phaser.Scene {
       console.error('❌ Invalid match results data:', data);
       // Fallback for development/testing only
       this.matchResults = {
+        lobbyId: 'test-lobby',
         winnerTeam: 'red',
         redKills: 50,
         blueKills: 47,
         duration: 300000,
-        killTarget: 50,
         playerStats: []
       };
       console.warn('⚠️ Using fallback match data for display');
@@ -446,7 +446,7 @@ export class MatchResultsScene extends Phaser.Scene {
     console.log('🔄 Play Again pressed - attempting rematch');
     
     // SENIOR DEV REVIEW: Stay in same lobby for rematch
-    const lobbyState = LobbyStateManager.getInstance().getCurrentLobby();
+    const lobbyState = LobbyStateManager.getInstance().getState();
     
     if (lobbyState?.lobbyId) {
       // Stay in same lobby
