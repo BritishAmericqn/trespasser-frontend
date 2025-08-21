@@ -425,7 +425,8 @@ export class InputSystem implements IGameSystem {
     this.inputState.mouse.y = Math.max(0, Math.min(gameHeight, this.inputState.mouse.y));
 
     // Ensure all required keys exist (even if false)
-    const requiredKeys = ['w', 'a', 's', 'd', 'shift', 'ctrl', 'r', 'g', '1', '2', '3', '4'];
+    type ValidKey = 'w' | 'a' | 's' | 'd' | 'shift' | 'ctrl' | 'r' | 'g' | '1' | '2' | '3' | '4';
+    const requiredKeys: ValidKey[] = ['w', 'a', 's', 'd', 'shift', 'ctrl', 'r', 'g', '1', '2', '3', '4'];
     for (const key of requiredKeys) {
       if (this.inputState.keys[key] === undefined) {
         this.inputState.keys[key] = false;
@@ -441,13 +442,14 @@ export class InputSystem implements IGameSystem {
 
     // Debug logging for Windows issue (only log every 60 frames)
     if (this.sequence % 60 === 0) {
+      const allKeysPresent = requiredKeys.every((k: ValidKey) => this.inputState.keys[k] !== undefined);
       console.log('📊 Input validation check:', {
         timestamp: this.inputState.timestamp,
         sequence: this.inputState.sequence,
         mouseX: this.inputState.mouse.x,
         mouseY: this.inputState.mouse.y,
         buttons: this.inputState.mouse.buttons,
-        hasAllKeys: requiredKeys.every(k => this.inputState.keys[k] !== undefined),
+        hasAllKeys: allKeysPresent,
         platform: navigator.platform,
         userAgent: navigator.userAgent.substring(0, 50)
       });
