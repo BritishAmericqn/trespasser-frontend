@@ -16,7 +16,7 @@ export interface InputState {
     '2': boolean;
     '3': boolean;
     '4': boolean;
-    '5': boolean;
+    // REMOVED '5' - backend only expects 1-4
   };
   mouse: {
     x: number;
@@ -126,8 +126,8 @@ export class InputSystem implements IGameSystem {
         '1': false,
         '2': false,
         '3': false,
-        '4': false,
-        '5': false
+        '4': false
+        // REMOVED '5' - backend only expects 1-4
       },
       mouse: { 
         x: 0, 
@@ -201,7 +201,7 @@ export class InputSystem implements IGameSystem {
       two: Phaser.Input.Keyboard.KeyCodes.TWO,
       three: Phaser.Input.Keyboard.KeyCodes.THREE,
       four: Phaser.Input.Keyboard.KeyCodes.FOUR,
-      five: Phaser.Input.Keyboard.KeyCodes.FIVE,
+      // REMOVED five - backend only expects 1-4
       space: Phaser.Input.Keyboard.KeyCodes.SPACE,
       enter: Phaser.Input.Keyboard.KeyCodes.ENTER
     });
@@ -333,7 +333,7 @@ export class InputSystem implements IGameSystem {
     this.inputState.keys['2'] = this.keys.two.isDown;
     this.inputState.keys['3'] = this.keys.three.isDown;
     this.inputState.keys['4'] = this.keys.four.isDown;
-    this.inputState.keys['5'] = this.keys.five.isDown;
+    // REMOVED '5' - backend only expects 1-4
 
     // Handle weapon switching
     this.handleWeaponSwitching();
@@ -397,8 +397,61 @@ export class InputSystem implements IGameSystem {
       delete this.inputState.position;
     }
 
+    // CRITICAL: Validate and fix input structure before sending
+    this.validateAndFixInputState();
+
     // Emit to NetworkSystem - send raw input state, backend calculates movement
     this.scene.events.emit(EVENTS.PLAYER_INPUT, this.inputState);
+  }
+
+  private validateAndFixInputState(): void {
+    // Ensure timestamp is valid
+    if (!this.inputState.timestamp || this.inputState.timestamp === 0) {
+      this.inputState.timestamp = Date.now();
+    }
+
+    // Ensure sequence is incrementing
+    if (!this.inputState.sequence || this.inputState.sequence === 0) {
+      this.inputState.sequence = this.sequence;
+    }
+
+    // Clamp mouse coordinates to valid bounds
+    // Backend accepts either game space (0-480, 0-270) or screen space (0-1920, 0-1080)
+    // We'll use game space as it's more consistent
+    const gameWidth = 480;
+    const gameHeight = 270;
+    
+    this.inputState.mouse.x = Math.max(0, Math.min(gameWidth, this.inputState.mouse.x));
+    this.inputState.mouse.y = Math.max(0, Math.min(gameHeight, this.inputState.mouse.y));
+
+    // Ensure all required keys exist (even if false)
+    const requiredKeys = ['w', 'a', 's', 'd', 'shift', 'ctrl', 'r', 'g', '1', '2', '3', '4'];
+    for (const key of requiredKeys) {
+      if (this.inputState.keys[key] === undefined) {
+        this.inputState.keys[key] = false;
+      }
+    }
+
+    // Ensure all mouse fields exist
+    if (this.inputState.mouse.buttons === undefined) this.inputState.mouse.buttons = 0;
+    if (this.inputState.mouse.leftPressed === undefined) this.inputState.mouse.leftPressed = false;
+    if (this.inputState.mouse.rightPressed === undefined) this.inputState.mouse.rightPressed = false;
+    if (this.inputState.mouse.leftReleased === undefined) this.inputState.mouse.leftReleased = false;
+    if (this.inputState.mouse.rightReleased === undefined) this.inputState.mouse.rightReleased = false;
+
+    // Debug logging for Windows issue (only log every 60 frames)
+    if (this.sequence % 60 === 0) {
+      console.log('📊 Input validation check:', {
+        timestamp: this.inputState.timestamp,
+        sequence: this.inputState.sequence,
+        mouseX: this.inputState.mouse.x,
+        mouseY: this.inputState.mouse.y,
+        buttons: this.inputState.mouse.buttons,
+        hasAllKeys: requiredKeys.every(k => this.inputState.keys[k] !== undefined),
+        platform: navigator.platform,
+        userAgent: navigator.userAgent.substring(0, 50)
+      });
+    }
   }
 
   // Get current input state (for local player movement)
@@ -599,9 +652,9 @@ export class InputSystem implements IGameSystem {
   }
 
   private handleWeaponSwitching(): void {
-    // Check for weapon switching (1-5 keys)
-    for (let i = 1; i <= 5; i++) {
-      const keyPressed = this.inputState.keys[i.toString() as '1' | '2' | '3' | '4' | '5'];
+    // Check for weapon switching (1-4 keys) - backend only supports 4 slots
+    for (let i = 1; i <= 4; i++) {
+      const keyPressed = this.inputState.keys[i.toString() as '1' | '2' | '3' | '4'];
       if (keyPressed && this.currentWeapon !== i) {
         this.switchWeapon(i);
         break;
