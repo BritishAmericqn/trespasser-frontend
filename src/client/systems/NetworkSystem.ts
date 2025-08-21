@@ -137,13 +137,14 @@ export class NetworkSystem implements IGameSystem {
       }
       
       this.socket = io(serverUrl, {
-        transports: ['websocket'],
-        timeout: 5000,
+        transports: ['polling', 'websocket'], // Start with polling for better compatibility
+        timeout: 10000, // Increased timeout for slower connections
         reconnection: true,
         reconnectionDelay: 2000,        // Increased from 1000ms to 2000ms
         reconnectionDelayMax: 10000,    // Increased from 5000ms to 10000ms
         reconnectionAttempts: this.MAX_RECONNECT_ATTEMPTS,
-        autoConnect: false  // Don't connect immediately
+        autoConnect: false,  // Don't connect immediately
+        withCredentials: true // Enable credentials for CORS
       });
       
       console.log(`🔌 DETAILED: Socket.IO instance created, setting up listeners...`);
@@ -152,12 +153,18 @@ export class NetworkSystem implements IGameSystem {
       this.setupSocketListeners();
       
       // Handle authentication if needed
-      this.socket.on('connect', () => {
-        console.log(`🔌 DETAILED: Socket.IO connected successfully to ${serverUrl}!`);
-        this.isConnected = true;
-        this.connectionAttempts = 0;
-        this.connectionInProgress = false; // Clear the flag on success
-        this.setConnectionState(ConnectionState.CONNECTED);
+          this.socket.on('connect', () => {
+      console.log(`🔌 DETAILED: Socket.IO connected successfully to ${serverUrl}!`);
+      console.log('📊 Connection details:', {
+        socketId: this.socket?.id,
+        transport: (this.socket as any)?.io?.engine?.transport?.name,
+        url: serverUrl,
+        timestamp: new Date().toISOString()
+      });
+      this.isConnected = true;
+      this.connectionAttempts = 0;
+      this.connectionInProgress = false; // Clear the flag on success
+      this.setConnectionState(ConnectionState.CONNECTED);
         
         // 🔥 NEW: No-password public server support
         // Only authenticate if password is explicitly provided OR server requires it
@@ -182,10 +189,29 @@ export class NetworkSystem implements IGameSystem {
             this.handleAuthenticationTimeout();
           }, 5000);
         } else {
-          // 🚀 PUBLIC SERVER: No password needed, connect directly
-          console.log('🌐 Public server connection - no authentication required');
-          this.setConnectionState(ConnectionState.AUTHENTICATED);
-          this.onGameReady();
+          // 🚀 PUBLIC SERVER: No password needed, but wait for server confirmation
+          console.log('🌐 Public server connection - waiting for server ready signal');
+          
+          // Send ready signal and wait for server confirmation
+          this.socket!.emit('client:ready', { 
+            timestamp: Date.now(),
+            userAgent: navigator.userAgent 
+          });
+          
+          // Set a timeout for server ready response
+          const readyTimeout = setTimeout(() => {
+            console.warn('⚠️ Server ready timeout - proceeding anyway');
+            this.setConnectionState(ConnectionState.AUTHENTICATED);
+            this.onGameReady();
+          }, 3000);
+          
+          // Wait for server ready confirmation
+          this.socket!.once('server:ready', () => {
+            clearTimeout(readyTimeout);
+            console.log('✅ Server confirmed ready');
+            this.setConnectionState(ConnectionState.AUTHENTICATED);
+            this.onGameReady();
+          });
         }
       });
       

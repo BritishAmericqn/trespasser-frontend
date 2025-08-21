@@ -1097,6 +1097,16 @@ export class MenuScene extends Phaser.Scene {
       return envBackendUrl;
     }
     
+    // Check if we're on production domain
+    const hostname = window.location.hostname;
+    if (hostname === 'trespass.gg' || hostname === 'www.trespass.gg') {
+      // PRODUCTION FALLBACK - Update this with your actual Railway URL!
+      const productionUrl = 'https://trespasser-backend-production.up.railway.app';
+      console.warn('⚠️ No VITE_BACKEND_URL set, using production fallback:', productionUrl);
+      console.warn('⚠️ Please set VITE_BACKEND_URL in Vercel environment variables!');
+      return productionUrl;
+    }
+    
     // Fallback to localhost for development
     const localUrl = 'http://localhost:3000';
     console.log('🔍 DEBUG: Using localhost fallback:', localUrl);

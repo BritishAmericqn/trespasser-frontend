@@ -964,10 +964,28 @@ export class GameScene extends Phaser.Scene {
     this.events.on('network:authenticated', (data: any) => {
       console.log('🎮 GameScene: Authentication successful');
       
-      // Set local player ID for proper identification
+      // Set local player ID for proper identification with retry logic
       const socketId = this.networkSystem.getSocket()?.id;
       if (socketId) {
         this.setLocalPlayerId(socketId);
+        console.log('✅ Local player ID set immediately:', socketId);
+      } else {
+        console.warn('⚠️ Socket ID not available yet, setting up retry...');
+        let retryCount = 0;
+        const retryInterval = setInterval(() => {
+          const retryId = this.networkSystem.getSocket()?.id;
+          if (retryId) {
+            this.setLocalPlayerId(retryId);
+            console.log('✅ Local player ID set after retry:', retryId);
+            clearInterval(retryInterval);
+          } else {
+            retryCount++;
+            if (retryCount > 5) {
+              console.error('❌ Failed to get socket ID after 5 retries');
+              clearInterval(retryInterval);
+            }
+          }
+        }, 1000);
       }
     });
 
