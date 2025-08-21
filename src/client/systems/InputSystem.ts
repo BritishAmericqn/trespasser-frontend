@@ -447,20 +447,7 @@ export class InputSystem implements IGameSystem {
     if (this.inputState.mouse.leftReleased === undefined) this.inputState.mouse.leftReleased = false;
     if (this.inputState.mouse.rightReleased === undefined) this.inputState.mouse.rightReleased = false;
 
-    // Debug logging for Windows issue (only log every 60 frames)
-    if (this.sequence % 60 === 0) {
-      const allKeysPresent = requiredKeys.every((k: ValidKey) => this.inputState.keys[k] !== undefined);
-      console.log('📊 Input validation check:', {
-        timestamp: this.inputState.timestamp,
-        sequence: this.inputState.sequence,
-        mouseX: this.inputState.mouse.x,
-        mouseY: this.inputState.mouse.y,
-        buttons: this.inputState.mouse.buttons,
-        hasAllKeys: allKeysPresent,
-        platform: navigator.platform,
-        userAgent: navigator.userAgent.substring(0, 50)
-      });
-    }
+    // Input validation happens silently
   }
 
   // Get current input state (for local player movement)
@@ -641,11 +628,6 @@ export class InputSystem implements IGameSystem {
     
     // Send weapon fire event to network system
     this.scene.events.emit('weapon:fire', fireData);
-    
-    // Log weapon fire for debugging
-    console.log(`🔫 Firing ${weapon}:`, fireData);
-    
-    // Concise weapon fire logging
     
   }
 

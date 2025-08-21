@@ -277,8 +277,7 @@ export class GameScene extends Phaser.Scene {
       const teamColor = this.playerLoadout?.team || 'blue'; // Fallback to blue if no team configured
       
       // Debug log to verify team assignment
-      console.log(`🎨 LOCAL PLAYER SPRITE: Creating as ${teamColor} team (from loadout selection)`);
-      console.log(`🔍 Debug: playerLoadout.team = ${this.playerLoadout?.team}, using: ${teamColor}`);
+      console.log(`🎨 LOCAL PLAYER: ${teamColor} team`);
       
       this.playerSprite = this.assetManager.createPlayer(
         this.playerPosition.x,
@@ -1128,13 +1127,14 @@ export class GameScene extends Phaser.Scene {
               }
               
               // Verify team color matches our loadout (trust frontend loadout over backend)
-              if (this.playerSprite && this.playerLoadout?.team) {
+              // ONLY do this check on first game state to avoid constant texture changes
+              if (isFirstGameState && this.playerSprite && this.playerLoadout?.team) {
                 const currentTexture = this.playerSprite.texture.key;
                 const expectedTexture = this.playerLoadout.team === 'red' ? 'player_red' : 'player_blue';
                 
                 // ONLY update if our sprite doesn't match our loadout
                 if (currentTexture !== expectedTexture) {
-                  console.log(`🎨 Correcting local player sprite to match loadout: ${currentTexture} → ${expectedTexture} (loadout team: ${this.playerLoadout.team})`);
+                  console.log(`🎨 First game state: Correcting local player sprite to match loadout: ${currentTexture} → ${expectedTexture} (loadout team: ${this.playerLoadout.team})`);
                   this.playerSprite.setTexture(expectedTexture);
                 }
                 
@@ -1254,9 +1254,7 @@ export class GameScene extends Phaser.Scene {
           }
           
           // Debug log team data (10% of updates to avoid spam)
-          if (Math.random() < 0.1) {
-            console.log(`🎨 Player ${id} team data: backend=${p.team} final=${p.team || 'blue'}`);
-          }
+          // Team data logging removed to reduce spam
           
           // Fix position format
           fixedPlayers[id] = {
@@ -1478,13 +1476,10 @@ export class GameScene extends Phaser.Scene {
     
     // Handle player death events (new death system)
     this.events.on('backend:player:died', (data: any) => {
-      console.log('💀 Player died event received:', data);
-      
       const localSocketId = this.networkSystem.getSocket()?.id;
-      console.log('💀 Checking death - localSocketId:', localSocketId, 'data.playerId:', data.playerId);
       
       if (data.playerId === localSocketId || data.playerId === this.localPlayerId) {
-        console.log('💀 Local player died!');
+        console.log('💀 You died!');
         this.handleLocalPlayerDeath(data);
       } else {
         console.log(`💀 Other player died: ${data.playerId}`);
@@ -1495,18 +1490,14 @@ export class GameScene extends Phaser.Scene {
 
     // Handle player respawn events (new respawn system)
     this.events.on('backend:player:respawned', (data: any) => {
-      console.log('✨ Player respawned event received:', data);
-      
       const localSocketId = this.networkSystem.getSocket()?.id;
-      console.log('✨ Checking respawn - localSocketId:', localSocketId, 'data.playerId:', data.playerId, 'this.localPlayerId:', this.localPlayerId);
       
       // Check multiple sources for player ID
       if (data.playerId === localSocketId || data.playerId === this.localPlayerId) {
-        console.log('✨ Local player respawned!');
+        console.log('✨ Respawned!');
         this.handleLocalPlayerRespawn(data);
       } else {
-        console.log(`✨ Other player respawned: ${data.playerId}`);
-        // Handle other player respawn in PlayerManager
+        // Handle other player respawn in PlayerManager silently
         this.playerManager.handlePlayerRespawn(data.playerId, data.position, data.invulnerableUntil);
       }
     });
@@ -1566,8 +1557,7 @@ export class GameScene extends Phaser.Scene {
 
     // Handle new players joining
     this.events.on('network:playerJoined', (data: any) => {
-      console.log('👥 New player joined:', data);
-      console.log('🔍 DEBUG: Current wall count:', this.wallSliceSprites.size);
+      // Player joined event handled silently
       console.log('🔍 DEBUG: Current player position:', this.playerPosition);
       console.log('🔍 DEBUG: Is this private lobby?', this.matchData?.isPrivate);
       
@@ -1620,7 +1610,7 @@ export class GameScene extends Phaser.Scene {
 
     // Handle players leaving
     this.events.on('network:playerLeft', (data: any) => {
-      console.log('👋 Player left:', data);
+      // Player left event handled silently
       
       // Remove the player from view
       if (data.playerId || data.id) {
@@ -2099,6 +2089,15 @@ export class GameScene extends Phaser.Scene {
       this.playerSprite.setPosition(position.x, position.y);
       this.playerSprite.setVisible(true);
       this.playerSprite.setAlpha(1);
+      
+      // CRITICAL: Restore correct team texture
+      if (this.playerLoadout?.team) {
+        const correctTexture = this.playerLoadout.team === 'red' ? 'player_red' : 'player_blue';
+        if (this.playerSprite.texture.key !== correctTexture) {
+          console.log(`🎨 Emergency respawn: Restoring team texture ${correctTexture}`);
+          this.playerSprite.setTexture(correctTexture);
+        }
+      }
     }
     
     // Reset systems

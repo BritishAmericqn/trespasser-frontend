@@ -463,11 +463,14 @@ export class VisualEffectsSystem implements IGameSystem {
 
     // Handle projectile creation and updates
     this.scene.events.on('backend:projectile:created', (data: any) => {
-
       this.createProjectile(data);
     });
 
     this.scene.events.on('backend:projectile:updated', (data: any) => {
+      // Keep warning for debugging - shows backend is sending updates without create
+      if (!this.projectiles.has(data.id)) {
+        console.warn('⚠️ Projectile update for unknown projectile:', data.id);
+      }
       this.updateProjectilePosition(data.id, data.position);
     });
 
@@ -1263,6 +1266,11 @@ export class VisualEffectsSystem implements IGameSystem {
   }
 
   private createProjectile(data: any): void {
+    // Check if projectile already exists
+    if (this.projectiles.has(data.id)) {
+      return;
+    }
+    
     const projectile: Projectile = {
       id: data.id,
       type: data.type,

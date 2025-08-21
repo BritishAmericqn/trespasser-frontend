@@ -302,19 +302,16 @@ export class NetworkSystem implements IGameSystem {
   private setupSocketListeners(): void {
     if (!this.socket) return;
 
-    // Debug listener - log ALL events for debugging
+    // Debug listener - only log critical events
     this.socket.onAny((eventName, data) => {
-      // Special handling for game:state to see if we're getting walls
-      if (eventName === 'game:state') {
-        const wallCount = data?.walls ? Object.keys(data.walls).length : 0;
-        const playerCount = Object.keys(data?.players || {}).length;
-        // console.log(`📥 BACKEND EVENT: "game:state" - ${wallCount} walls, ${playerCount} players`);
-      } else if (eventName === 'player:updated') {
-        // Skip player:updated to reduce spam
-        return;
-      } else {
-        console.log(`📥 BACKEND EVENT: ${eventName}`);
+      // Only log important events, skip routine updates
+      const importantEvents = ['authenticated', 'auth-failed', 'player:join:success', 'player:join:failed', 
+                               'match_started', 'match_ended', 'disconnect', 'connect_error'];
+      
+      if (importantEvents.includes(eventName)) {
+        console.log(`📥 ${eventName}`);
       }
+      // Skip all other events to reduce spam
     });
 
     // Remove the old connect handler since we handle it in connectToServer
@@ -647,27 +644,21 @@ export class NetworkSystem implements IGameSystem {
   }
 
   private setupEventListeners(): void {
-    console.log('🎮 NetworkSystem: Setting up event listeners');
-    
     // Listen for input events from InputSystem
     this.scene.events.on(EVENTS.PLAYER_INPUT, (inputState: InputState) => {
-      // Input event logging removed to reduce console spam
       this.sendPlayerInput(inputState);
     });
     
     // Listen for weapon events from InputSystem
     this.scene.events.on('weapon:fire', (data: any) => {
-      console.log('🎯 NetworkSystem received weapon:fire event', data);
       this.emit('weapon:fire', data);
     });
     
     this.scene.events.on('weapon:switch', (data: any) => {
-      console.log('🎯 NetworkSystem received weapon:switch event', data);
       this.emit('weapon:switch', data);
     });
     
     this.scene.events.on('weapon:reload', (data: any) => {
-      console.log('🎯 NetworkSystem received weapon:reload event', data);
       this.emit('weapon:reload', data);
     });
     
@@ -780,11 +771,6 @@ export class NetworkSystem implements IGameSystem {
     }
 
     try {
-      // Log all weapon events being sent to backend
-      if (event.startsWith('weapon:') || event === 'ads:toggle') {
-        console.log(`📤 Sending to backend: ${event}`, data);
-      }
-      
       this.socket.emit(event, data);
     } catch (error) {
       console.error(`Failed to emit ${event}:`, error);

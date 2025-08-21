@@ -226,7 +226,17 @@ export class RespawnManager {
         this.scene.playerSprite.setAlpha(1);
         this.scene.playerSprite.clearTint();
         this.scene.playerSprite.setScale(1);
-        console.log('   Sprite reset at:', position);
+        
+        // CRITICAL: Restore correct team texture from loadout
+        if (this.scene.playerLoadout?.team) {
+          const correctTexture = this.scene.playerLoadout.team === 'red' ? 'player_red' : 'player_blue';
+          if (this.scene.playerSprite.texture.key !== correctTexture) {
+            console.log(`🎨 Restoring team texture on respawn: ${correctTexture} (team: ${this.scene.playerLoadout.team})`);
+            this.scene.playerSprite.setTexture(correctTexture);
+          }
+        }
+        
+        console.log('   Sprite reset at:', position, 'with team:', this.scene.playerLoadout?.team);
       } else {
         console.warn('⚠️ No player sprite found');
       }

@@ -407,10 +407,7 @@ export class PlayerManager {
       console.error(`❌ Player ${(state as any).id} has no team data or position to infer from, defaulting to blue`);
     }
     
-    // Log team assignment for debugging
-    if (Math.random() < 0.1) { // Reduce log spam - only log 10% of the time
-      console.log(`🎨 Creating sprite for player ${playerId} with team: ${team}`);
-    }
+    // Team assignment occurs silently
     
     // Use real player sprite (right-handed)
     const body = this.assetManager.createPlayer(0, 0, team);
